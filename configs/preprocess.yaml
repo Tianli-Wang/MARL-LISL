@@ -1,0 +1,25 @@
+raw_dir: data/raw_stk/by_step
+fallback_raw_dir: raw_stk
+
+sat_state_dir: data/sat_state
+graph_root_dir: data/graphs
+
+# 0 表示自动选择（内部上限为 4，避免多进程建图耗尽内存）
+parallel_workers: 400
+
+dt: 5.0
+expected_num_steps: 721
+expected_num_sats: 6080
+
+d_max_m: 2000000.0
+d_max_name: dmax_2000km
+
+earth_radius_m: 6371000.0
+speed_of_light_m_s: 299792458.0
+
+default_capacity: 1.0
+
+setup_delay:
+  base_s: 0.01
+  distance_coef: 1.0e-8
+  angular_rate_coef: 0.1

@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+
+.venv/
+venv/
+
+data/raw_stk/
+data/sat_state/
+data/graphs/
+
+outputs/
+
+*.log
+.DS_Store
+.vscode/
