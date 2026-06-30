@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import time
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,7 @@ from .loss import compute_mappo_loss
 from .policy import MAPPOPolicy
 from .rollout_buffer import RolloutBuffer
 from .utils import explained_variance, set_seed
+from marl_lisl.utils.progress import progress_iter
 
 
 class MAPPOTrainer:
@@ -44,6 +46,8 @@ class MAPPOTrainer:
             warnings.warn("CUDA requested but unavailable; falling back to CPU")
             requested_device = "cpu"
         self.device = torch.device(requested_device)
+        if self.device.type == "cuda":
+            torch.set_float32_matmul_precision("high")
         actor_cfg, critic_cfg = mappo_config["actor"], mappo_config["critic"]
         actor = Actor(
             configured[2], int(actor_cfg["hidden_dim"]), int(actor_cfg["num_layers"]),
@@ -54,6 +58,7 @@ class MAPPOTrainer:
             critic_cfg.get("activation", "relu"),
         )
         self.policy = MAPPOPolicy(actor, critic, self.device)
+        self._log_device_info()
         self.optimizer = torch.optim.Adam(
             self.policy.parameters(), lr=float(mappo_config["learning_rate"])
         )
@@ -78,6 +83,21 @@ class MAPPOTrainer:
         self.last_done = False
         self.current_update = 0
         self._episode_reward = 0.0
+
+    def _log_device_info(self) -> None:
+        """Print where MAPPO neural-network computation will run."""
+        param_count = sum(parameter.numel() for parameter in self.policy.parameters())
+        print(f"MAPPO policy device: {self.device}")
+        print(f"MAPPO parameter count: {param_count}")
+        if self.device.type == "cuda":
+            index = self.device.index if self.device.index is not None else torch.cuda.current_device()
+            name = torch.cuda.get_device_name(index)
+            total_gb = torch.cuda.get_device_properties(index).total_memory / (1024 ** 3)
+            print(f"CUDA device: cuda:{index} {name} ({total_gb:.1f} GB)")
+            print(
+                "Note: LISL env / NetworkX path search / future mutex are CPU-bound; "
+                "GPU is used for actor-critic forward/backward only."
+            )
 
     def collect_rollout(self) -> dict[str, float]:
         self.buffer.reset()
@@ -161,30 +181,89 @@ class MAPPOTrainer:
                 writer.writeheader()
             writer.writerow(metrics)
 
+    @staticmethod
+    def _format_progress(metrics: dict) -> dict[str, str]:
+        """Select compact metrics for tqdm postfix display."""
+        keys = (
+            "mean_reward",
+            "mean_future_mutex",
+            "mean_outage_count",
+            "actor_loss",
+            "critic_loss",
+            "entropy",
+            "rollout_time_s",
+            "update_time_s",
+        )
+        labels = {
+            "mean_reward": "reward",
+            "mean_future_mutex": "mutex",
+            "mean_outage_count": "outage",
+            "actor_loss": "actor",
+            "critic_loss": "critic",
+            "entropy": "ent",
+            "rollout_time_s": "rollout_s",
+            "update_time_s": "update_s",
+        }
+        return {
+            labels[key]: f"{float(metrics[key]):.4g}"
+            for key in keys
+            if key in metrics
+        }
+
     def train(self) -> None:
         logging_cfg = self.config["logging"]
         total_updates = int(self.config["total_updates"])
-        for update in range(1, total_updates + 1):
+        updates = progress_iter(
+            range(1, total_updates + 1),
+            total=total_updates,
+            desc="MAPPO training",
+            unit="update",
+        )
+        for update in updates:
             self.current_update = update
-            metrics = {"update": update, **self.collect_rollout(), **self.update()}
+            rollout_start = time.perf_counter()
+            rollout_metrics = self.collect_rollout()
+            rollout_time = time.perf_counter() - rollout_start
+            update_start = time.perf_counter()
+            update_metrics = self.update()
+            update_time = time.perf_counter() - update_start
+            metrics = {
+                "update": update,
+                **rollout_metrics,
+                **update_metrics,
+                "rollout_time_s": rollout_time,
+                "update_time_s": update_time,
+            }
             self._write_metrics(metrics)
+            if hasattr(updates, "set_postfix"):
+                updates.set_postfix(self._format_progress(metrics))
             if update == 1 or update % int(logging_cfg["log_interval"]) == 0:
-                print(
+                message = (
                     f"update={update:04d} reward={metrics['mean_reward']:.6f} "
                     f"future_mutex={metrics['mean_future_mutex']:.6f} "
                     f"outage={metrics['mean_outage_count']:.3f} "
                     f"switch={metrics['mean_switch_count']:.3f} "
                     f"actor_loss={metrics['actor_loss']:.6f} "
                     f"critic_loss={metrics['critic_loss']:.6f} "
-                    f"entropy={metrics['entropy']:.6f}"
+                    f"entropy={metrics['entropy']:.6f} "
+                    f"rollout_s={metrics['rollout_time_s']:.2f} "
+                    f"update_s={metrics['update_time_s']:.2f}"
                 )
+                if hasattr(updates, "write"):
+                    updates.write(message)
+                else:
+                    print(message)
             if update % int(logging_cfg["save_interval"]) == 0:
                 self.save_checkpoint(f"checkpoint_{update:06d}.pt")
                 self.save_checkpoint("latest.pt")
             eval_interval = int(logging_cfg.get("eval_interval", 0))
             if eval_interval > 0 and update % eval_interval == 0:
                 evaluation = self.evaluate(1)
-                print(f"evaluation update={update:04d} reward={evaluation['total_reward']:.6f}")
+                message = f"evaluation update={update:04d} reward={evaluation['total_reward']:.6f}"
+                if hasattr(updates, "write"):
+                    updates.write(message)
+                else:
+                    print(message)
                 self.obs = self.state = self.action_mask = None
         self.save_checkpoint("latest.pt")
         print(f"Training finished. Run directory: {self.run_dir}")

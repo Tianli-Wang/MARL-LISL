@@ -4,24 +4,20 @@ from __future__ import annotations
 
 import numpy as np
 
-from marl_lisl.utils.graph import build_edge_lookup, edge_path_from_node_path
+from marl_lisl.utils.graph import (
+    edge_ids_for_edge_set,
+    edge_ids_for_node_path,
+    edge_path_from_node_path,
+)
 
 
 class ObservationBuilder:
     # T_prop, T_setup, R_min, N_new, hops, feasible, A_mutex, B_avoid
     obs_dim = 8
 
-    def __init__(self, num_candidates: int):
+    def __init__(self, num_candidates: int, num_sats: int):
         self.num_candidates = int(num_candidates)
-        self._graph_token: int | None = None
-        self._edge_lookup: dict[tuple[int, int], int] = {}
-
-    def _lookup(self, graph: dict) -> dict[tuple[int, int], int]:
-        token = id(graph["edge_index"])
-        if token != self._graph_token:
-            self._edge_lookup = build_edge_lookup(graph)
-            self._graph_token = token
-        return self._edge_lookup
+        self.num_sats = int(num_sats)
 
     def path_features(
         self, graph: dict, current_path: list[int] | None, path: list[int] | None
@@ -29,18 +25,17 @@ class ObservationBuilder:
         result = np.zeros(self.obs_dim, dtype=np.float32)
         if not path or len(path) < 2:
             return result
-        lookup = self._lookup(graph)
-        path_edges = edge_path_from_node_path(path)
-        if not path_edges or any(edge not in lookup for edge in path_edges):
+        edge_ids = edge_ids_for_node_path(graph, path, self.num_sats)
+        if edge_ids is None:
             return result
+        path_edges = edge_path_from_node_path(path)
         old_edges = edge_path_from_node_path(current_path)
-        edge_ids = np.asarray([lookup[edge] for edge in path_edges], dtype=np.int64)
         new_edges = path_edges - old_edges
-        new_ids = [lookup[edge] for edge in new_edges]
+        new_ids = edge_ids_for_edge_set(graph, new_edges, self.num_sats) if new_edges else None
         attrs = graph["edge_attr"]
         result[:] = (
             float(attrs[edge_ids, 1].sum()),
-            float(attrs[new_ids, 2].max()) if new_ids else 0.0,
+            float(attrs[new_ids, 2].max()) if new_ids is not None and len(new_ids) else 0.0,
             float(attrs[edge_ids, 3].min()),
             float(len(new_edges)),
             float(len(path) - 1),
@@ -78,13 +73,25 @@ class ObservationBuilder:
         if mask[0] > 0:
             obs[0, 6] = keep_mutex
             obs[0, 7] = 0.0
-        for index, path in enumerate(candidate_paths[: self.num_candidates], start=1):
+        limited_candidates = candidate_paths[: self.num_candidates]
+        candidate_mutexes: list[float | None] = [None] * len(limited_candidates)
+        if mutex_enabled and limited_candidates and hasattr(
+            future_mutex_detector, "compute_candidate_mutexes"
+        ):
+            batch_results = future_mutex_detector.compute_candidate_mutexes(
+                all_paths, flow_id, limited_candidates, k
+            )
+            candidate_mutexes = [float(value) for value, _info in batch_results]
+        for index, path in enumerate(limited_candidates, start=1):
             obs[index] = self.path_features(graph, current_path, path)
             mask[index] = obs[index, 5]
             if mutex_enabled and mask[index] > 0:
-                candidate_mutex, _ = future_mutex_detector.compute_candidate_mutex(
-                    all_paths, flow_id, path, k
-                )
+                cached_mutex = candidate_mutexes[index - 1]
+                if cached_mutex is None:
+                    cached_mutex, _ = future_mutex_detector.compute_candidate_mutex(
+                        all_paths, flow_id, path, k
+                    )
+                candidate_mutex = float(cached_mutex)
                 obs[index, 6] = candidate_mutex
                 obs[index, 7] = keep_mutex - candidate_mutex
         return obs, mask

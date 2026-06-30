@@ -2,11 +2,11 @@ seed: 42
 device: cuda
 
 num_envs: 1
-rollout_length: 512
-total_updates: 1000
+rollout_length: 128
+total_updates: 300
 
-num_agents: 16
-num_actions: 9
+num_agents: 4
+num_actions: 6
 obs_dim: 8
 state_dim: 7
 
@@ -14,8 +14,8 @@ gamma: 0.99
 gae_lambda: 0.95
 
 clip_ratio: 0.2
-ppo_epochs: 5
-minibatch_size: 256
+ppo_epochs: 3
+minibatch_size: 128
 
 learning_rate: 0.0003
 value_coef: 0.5
@@ -37,8 +37,8 @@ critic:
 logging:
   log_interval: 5
   save_interval: 50
-  eval_interval: 50
+  eval_interval: 0
 
 output:
   run_root: outputs/runs
-  experiment_name: mappo_a100_16flow
+  experiment_name: mappo_a100_4flow_fast

@@ -35,6 +35,9 @@ pip install -r requirements.txt
 python scripts/preprocess/01_build_sat_state.py
 python scripts/preprocess/02_build_graph_snapshots.py
 python scripts/preprocess/03_check_processed_data.py
+python scripts/preprocess/04_build_traffic_pairs.py --config configs/env.yaml
+python scripts/preprocess/05_build_mutex.py --config configs/env.yaml
+python scripts/preprocess/06_build_candidates.py --config configs/env.yaml --split both
 ```
 
 三个脚本均支持显式指定 YAML 配置：
@@ -57,10 +60,29 @@ python scripts/preprocess/02_build_graph_snapshots.py --workers 4
 - 第三个检查阶段按时隙和抽样图串行执行，保证输出顺序稳定、warning 易于定位。
 - 剩余寿命依赖下一时隙结果，因此必须按 `0720 → 0000` 反向串行扫描；将这一步并行会破坏连续寿命定义。
 - 上述长循环均已接入 `tqdm` 进度条，包括 STK 扫描、状态转换、图快照构建、寿命反向扫描和检查阶段。
+- 第六步会把每个时隙、每条业务流的 K 条候选路径预计算到 `data/candidates/`；
+  训练和评估环境会直接读取这些候选路径，避免在线反复调用 NetworkX K 最短路。
 
 建图单个 worker 会占用较多内存；当前配置按 512 CPU 线程、720G 内存机器默认使用
 128 个 worker。若 IO 抖动或内存压力过大，可先降到 64；配置为 0 时程序根据 CPU
 自动选择，但仍最多使用 128 个。
+
+## 候选路径预计算格式
+
+每个时隙保存一个文件：
+
+```text
+data/candidates/train/cand_0000.npz
+data/candidates/eval/cand_0000.npz
+```
+
+文件内部包含：
+
+- `nodes`：所有候选路径节点拼接成的一维 `int64` 数组；
+- `offsets`：形状为 `(num_flows, num_candidates + 1)`，用于切分每条 flow 的候选路径。
+
+空路径用相同的起止 offset 表示。环境通过 `CandidateStore` 懒加载最近几个时隙，
+不会一次性读入全部候选文件。
 
 建图脚本逐时隙打印边数，并采用两遍处理：先生成所有图，再反向扫描回填链路
 剩余寿命。这只在内存中保留当前时隙所需的数据，适合 6080 颗卫星的规模。

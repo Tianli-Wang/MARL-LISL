@@ -49,12 +49,19 @@ class FutureMutexDetector:
         return keys
 
     def _path_available(self, path: list[int] | None, edge_keys: np.ndarray) -> bool:
+        return self._encoded_path_available(self._encoded_path_edges(path), edge_keys)
+
+    def _encoded_path_edges(self, path: list[int] | None) -> np.ndarray:
+        """Encode a node path into sparse integer edge keys once for reuse."""
         if path is None or len(path) < 2:
-            return False
-        encoded = np.fromiter(
+            return np.empty(0, dtype=np.int64)
+        return np.fromiter(
             (u * self.num_sats + v for u, v in edge_path_from_node_path(path)),
             dtype=np.int64,
         )
+
+    def _encoded_path_available(self, encoded: np.ndarray, edge_keys: np.ndarray) -> bool:
+        """Check whether all encoded path edges exist in one graph snapshot."""
         if not len(encoded):
             return False
         indices = np.searchsorted(edge_keys, encoded)
@@ -71,6 +78,11 @@ class FutureMutexDetector:
         first_conflict_slot: int | None = None
         first_conflict_nodes: list[int] = []
         evaluated_slots = 0
+        encoded_paths = [self._encoded_path_edges(path) for path in paths]
+        occupied_nodes = [
+            self._occupied_nodes(path) if path is not None else []
+            for path in paths
+        ]
 
         for delta in range(self.future_window + 1):
             slot = int(k) + delta
@@ -82,11 +94,11 @@ class FutureMutexDetector:
                 break
             evaluated_slots += 1
             occupancy: Counter[int] = Counter()
-            for path in paths:
-                if not self._path_available(path, edge_keys):
+            for encoded, nodes in zip(encoded_paths, occupied_nodes):
+                if not self._encoded_path_available(encoded, edge_keys):
                     invalid_future_path_count += 1
                     continue
-                occupancy.update(self._occupied_nodes(path))
+                occupancy.update(nodes)
 
             conflict_nodes: list[int] = []
             slot_conflicts = 0
@@ -122,3 +134,92 @@ class FutureMutexDetector:
         new_paths = list(paths)
         new_paths[int(flow_id)] = candidate_path
         return self.compute_future_mutex(new_paths, k)
+
+    def compute_candidate_mutexes(
+        self,
+        paths: list,
+        flow_id: int,
+        candidate_paths: list[list[int] | None],
+        k: int,
+    ) -> list[tuple[float, dict]]:
+        """Compute future mutex for many replacement paths with shared slot work."""
+        flow_id = int(flow_id)
+        candidate_count = len(candidate_paths)
+        mutex_counts = np.zeros(candidate_count, dtype=np.float64)
+        raw_conflict_counts = np.zeros(candidate_count, dtype=np.int64)
+        invalid_counts = np.zeros(candidate_count, dtype=np.int64)
+        first_slots: list[int | None] = [None] * candidate_count
+        first_nodes: list[list[int]] = [[] for _ in range(candidate_count)]
+        evaluated_slots = 0
+
+        base_encoded: list[np.ndarray] = []
+        base_nodes: list[list[int]] = []
+        for index, path in enumerate(paths):
+            if index == flow_id:
+                continue
+            base_encoded.append(self._encoded_path_edges(path))
+            base_nodes.append(self._occupied_nodes(path) if path is not None else [])
+        candidate_encoded = [self._encoded_path_edges(path) for path in candidate_paths]
+        candidate_nodes = [
+            self._occupied_nodes(path) if path is not None else []
+            for path in candidate_paths
+        ]
+
+        for delta in range(self.future_window + 1):
+            slot = int(k) + delta
+            try:
+                edge_keys = self._edge_keys(slot)
+            except FileNotFoundError:
+                if delta == 0:
+                    raise
+                break
+            evaluated_slots += 1
+
+            base_occupancy: Counter[int] = Counter()
+            base_invalid = 0
+            for encoded, nodes in zip(base_encoded, base_nodes):
+                if not self._encoded_path_available(encoded, edge_keys):
+                    base_invalid += 1
+                    continue
+                base_occupancy.update(nodes)
+
+            for candidate_id, (encoded, nodes) in enumerate(
+                zip(candidate_encoded, candidate_nodes)
+            ):
+                occupancy = base_occupancy.copy()
+                invalid = base_invalid
+                if self._encoded_path_available(encoded, edge_keys):
+                    occupancy.update(nodes)
+                else:
+                    invalid += 1
+                invalid_counts[candidate_id] += invalid
+
+                conflict_nodes: list[int] = []
+                slot_conflicts = 0
+                for node, count in occupancy.items():
+                    excess = count - int(self.node_capacity[node])
+                    if excess > 0:
+                        slot_conflicts += excess
+                        conflict_nodes.append(node)
+                if slot_conflicts:
+                    raw_conflict_counts[candidate_id] += slot_conflicts
+                    mutex_counts[candidate_id] += (self.future_discount ** delta) * slot_conflicts
+                    if first_slots[candidate_id] is None:
+                        first_slots[candidate_id] = slot
+                        first_nodes[candidate_id] = sorted(conflict_nodes)
+
+        results: list[tuple[float, dict]] = []
+        for candidate_id in range(candidate_count):
+            value = float(mutex_counts[candidate_id])
+            results.append((
+                value,
+                {
+                    "future_mutex": value,
+                    "raw_conflict_count": int(raw_conflict_counts[candidate_id]),
+                    "invalid_future_path_count": int(invalid_counts[candidate_id]),
+                    "first_conflict_slot": first_slots[candidate_id],
+                    "first_conflict_nodes": first_nodes[candidate_id],
+                    "evaluated_slots": evaluated_slots,
+                },
+            ))
+        return results

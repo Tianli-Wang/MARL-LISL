@@ -19,6 +19,13 @@ def _resolved_config(path: Path) -> dict:
     config = load_yaml(path)
     for key in ("graph_dir", "traffic_dir", "traffic_train_path", "traffic_eval_path"):
         config[key] = ROOT / config[key]
+    candidates_cfg = dict(config.get("candidates", {}))
+    for key in ("train_dir", "eval_dir"):
+        if key in candidates_cfg:
+            candidates_cfg[key] = ROOT / candidates_cfg[key]
+    config["candidates"] = candidates_cfg
+    if candidates_cfg.get("enabled", False):
+        config["candidate_dir"] = candidates_cfg["train_dir"]
     config["future_mutex"] = dict(config["future_mutex"])
     config["future_mutex"]["node_mutex_path"] = (
         ROOT / config["future_mutex"]["node_mutex_path"]

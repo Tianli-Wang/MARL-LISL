@@ -12,6 +12,7 @@ from marl_lisl.envs.future_mutex_detector import FutureMutexDetector
 from marl_lisl.envs.observation_builder import ObservationBuilder
 from marl_lisl.envs.path_generator import PathGenerator
 from marl_lisl.envs.reward_calculator import RewardCalculator
+from marl_lisl.store.candidate_store import CandidateStore
 from marl_lisl.store.graph_store import GraphStore
 from marl_lisl.store.mutex_store import MutexStore
 from marl_lisl.store.traffic_store import TrafficStore
@@ -37,7 +38,18 @@ class LISLMultiFlowEnv:
             raise ValueError("episode_start must be inside [0, num_steps)")
         self.episode_end = min(self.num_steps, self.episode_start + self.episode_length)
 
-        self.graph_store = GraphStore(Path(config["graph_dir"]), cache_size=3)
+        mutex_cfg = config.get("future_mutex", {})
+        graph_cache_size = int(
+            config.get(
+                "graph_cache_size",
+                max(3, int(mutex_cfg.get("future_window", 0)) + 4),
+            )
+        )
+        self.graph_store = GraphStore(
+            Path(config["graph_dir"]),
+            cache_size=graph_cache_size,
+            preload=bool(config.get("graph_preload", False)),
+        )
         traffic_path = config.get("traffic_path", config["traffic_train_path"])
         self.traffic_store = TrafficStore(Path(traffic_path))
         self.traffic_pairs = self.traffic_store.get_pairs()
@@ -46,10 +58,34 @@ class LISLMultiFlowEnv:
                 f"Configured num_flows={self.num_flows}, traffic file has {len(self.traffic_pairs)}"
             )
         self.path_generator = PathGenerator(self.num_candidates, config["path_weight"])
-        self.observation_builder = ObservationBuilder(self.num_candidates)
+        candidates_cfg = dict(config.get("candidates", {}))
+        self.use_precomputed_candidates = bool(candidates_cfg.get("enabled", False))
+        self.candidate_store: CandidateStore | None = None
+        if self.use_precomputed_candidates:
+            candidate_dir = config.get("candidate_dir")
+            if candidate_dir is None:
+                traffic_path_resolved = Path(traffic_path)
+                eval_path = Path(config["traffic_eval_path"])
+                train_path = Path(config["traffic_train_path"])
+                stress_path = Path(config["traffic_stress_path"]) if "traffic_stress_path" in config else None
+                if traffic_path_resolved == eval_path:
+                    candidate_dir = candidates_cfg["eval_dir"]
+                elif traffic_path_resolved == train_path:
+                    candidate_dir = candidates_cfg["train_dir"]
+                elif stress_path is not None and traffic_path_resolved == stress_path:
+                    candidate_dir = candidates_cfg.get("stress_dir")
+            if candidate_dir is not None:
+                self.candidate_store = CandidateStore(
+                    Path(candidate_dir),
+                    self.num_flows,
+                    self.num_candidates,
+                    cache_size=int(candidates_cfg.get("cache_size", 3)),
+                )
+            else:
+                self.use_precomputed_candidates = False
+        self.observation_builder = ObservationBuilder(self.num_candidates, self.num_sats)
         self.reward_calculator = RewardCalculator(config["reward_weights"])
-        self.conflict_detector = ConflictDetector()
-        mutex_cfg = config.get("future_mutex", {})
+        self.conflict_detector = ConflictDetector(self.num_sats)
         self.future_mutex_enabled = bool(mutex_cfg.get("enabled", False))
         self.mutex_store: MutexStore | None = None
         self.future_mutex_detector: FutureMutexDetector | None = None
@@ -74,6 +110,8 @@ class LISLMultiFlowEnv:
         self._done = False
 
     def _generate_candidates(self, graph: dict) -> list[list[list[int]]]:
+        if self.candidate_store is not None:
+            return self.candidate_store.get_candidates(self.k)
         pairs = [(int(source), int(dest)) for source, dest, _demand in self.traffic_pairs]
         self.path_generator.prepare_graph(graph)
         if self.parallel_workers <= 1 or len(pairs) <= 1:

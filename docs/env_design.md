@@ -22,13 +22,15 @@ agent 共享团队 reward。当前仍不包含 MAPPO、actor/critic 或训练缓
 
 ```bash
 python scripts/preprocess/04_build_traffic_pairs.py --config configs/env.yaml
+python scripts/preprocess/06_build_candidates.py --config configs/env.yaml --split both
 ```
 
 ## 候选路径与动作
 
-`PathGenerator` 使用 NetworkX `shortest_simple_paths` 生成 K 条简单路径。边权为
-传播时延、建链时延和剩余寿命倒数的加权和。同一时隙只转换一次 NetworkX 图，
-供所有 flow 复用。
+默认配置 `candidates.enabled: true`，环境会从 `data/candidates/` 读取离线预计算
+的 K 条候选路径。离线构建阶段使用 NetworkX `shortest_simple_paths`，边权为
+传播时延、建链时延和剩余寿命倒数的加权和。若关闭预计算，环境才会退回在线
+`PathGenerator`，但这会显著拖慢 reset/step。
 
 每个 agent 的离散动作：
 

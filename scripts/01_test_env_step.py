@@ -19,6 +19,11 @@ def _resolve_data_paths(config: dict) -> dict:
     config = dict(config)
     for key in ("graph_dir", "traffic_dir", "traffic_train_path", "traffic_eval_path"):
         config[key] = ROOT / config[key]
+    candidates_cfg = dict(config.get("candidates", {}))
+    for key in ("train_dir", "eval_dir"):
+        if key in candidates_cfg:
+            candidates_cfg[key] = ROOT / candidates_cfg[key]
+    config["candidates"] = candidates_cfg
     mutex_cfg = dict(config.get("future_mutex", {}))
     if "node_mutex_path" in mutex_cfg:
         mutex_cfg["node_mutex_path"] = ROOT / mutex_cfg["node_mutex_path"]
@@ -38,6 +43,10 @@ def main() -> None:
     config = _resolve_data_paths(load_yaml(args.config))
     if args.eval:
         config["traffic_path"] = config["traffic_eval_path"]
+        if config.get("candidates", {}).get("enabled", False):
+            config["candidate_dir"] = config["candidates"]["eval_dir"]
+    elif config.get("candidates", {}).get("enabled", False):
+        config["candidate_dir"] = config["candidates"]["train_dir"]
     rng = np.random.default_rng(args.seed)
     env = LISLMultiFlowEnv(config)
     obs, state, action_mask = env.reset()

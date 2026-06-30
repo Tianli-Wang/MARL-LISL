@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
-from typing import TypeVar
+from collections.abc import Iterable
+from typing import Any, TypeVar
 
 T = TypeVar("T")
 
@@ -13,9 +13,8 @@ except Exception:  # pragma: no cover
     _tqdm = None
 
 
-def progress_iter(iterable: Iterable[T], **kwargs: object) -> Iterator[T]:
+def progress_iter(iterable: Iterable[T], **kwargs: object) -> Iterable[T] | Any:
     """Return a tqdm-wrapped iterator when available, otherwise the original iterator."""
     if _tqdm is None:
-        yield from iterable
-    else:
-        yield from _tqdm(iterable, **kwargs)
+        return iterable
+    return _tqdm(iterable, **kwargs)

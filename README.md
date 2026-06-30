@@ -45,6 +45,9 @@ pip install -r requirements.txt
 python scripts/preprocess/01_build_sat_state.py
 python scripts/preprocess/02_build_graph_snapshots.py
 python scripts/preprocess/03_check_processed_data.py
+python scripts/preprocess/04_build_traffic_pairs.py --config configs/env.yaml --workers 2
+python scripts/preprocess/05_build_mutex.py --config configs/env.yaml
+python scripts/preprocess/06_build_candidates.py --config configs/env.yaml --split both --workers 128
 ```
 
 前两个构建入口默认使用 `configs/preprocess.yaml` 中的 `parallel_workers: 128`，
@@ -73,6 +76,7 @@ MAPPO 环境读取方式见 [docs/preprocess.md](docs/preprocess.md)。
 
 ```bash
 python scripts/preprocess/04_build_traffic_pairs.py --config configs/env.yaml --workers 4
+python scripts/preprocess/06_build_candidates.py --config configs/env.yaml --split both --workers 128
 ```
 
 再用合法随机动作执行环境：
@@ -82,7 +86,9 @@ python scripts/01_test_env_step.py --config configs/env.yaml --steps 20
 ```
 
 当前 `future_mutex.enabled: true`，首次运行环境前还需执行第三阶段的
-`05_build_mutex.py` 命令生成节点容量文件。
+`05_build_mutex.py` 命令生成节点容量文件。当前 `candidates.enabled: true`，
+环境会直接读取 `data/candidates/{train,eval}/cand_XXXX.npz`，不再在线执行慢速
+NetworkX K 最短路；如果候选文件缺失，请先运行 `06_build_candidates.py`。
 
 每条 flow 是一个 agent，动作 `0` 表示保持当前路径，`1..K` 表示切换到对应
 候选路径。`GraphStore` 只缓存最近 3 个时隙，环境不会一次加载全部 721 张图。
@@ -93,8 +99,9 @@ Observation、全局 state、reward、traffic 格式和当前实现边界详见
 
 ```bash
 python scripts/preprocess/05_build_mutex.py --config configs/env.yaml
+python scripts/preprocess/06_build_candidates.py --config configs/env.yaml --split both --workers 128
 python scripts/02_test_future_mutex.py --config configs/env.yaml
-python scripts/03_run_proactive_rule.py --config configs/env.yaml
+python scripts/03_run_proactive_rule.py --config configs/env.yaml --steps 20
 ```
 
 环境 observation 已扩展为 8 维候选路径特征，新增 `A_mutex`（动作后的未来冲突）
@@ -112,7 +119,8 @@ python scripts/05_evaluate_mappo.py \
 
 当前 MAPPO 使用共享候选动作 MLP Actor 和 centralized critic，支持 action mask、
 GAE、clipped PPO、CSV metrics 与 checkpoint。详见
-[docs/mappo_design.md](docs/mappo_design.md)。
+[docs/mappo_design.md](docs/mappo_design.md)。训练循环已接入 `tqdm` update 级进度条，
+会实时显示 reward、future mutex、outage、actor/critic loss 和 entropy。
 
 ## 并行计算说明
 
@@ -120,7 +128,8 @@ GAE、clipped PPO、CSV metrics 与 checkpoint。详见
 - `02_build_graph_snapshots.py`：按图快照并行构建，剩余寿命反向扫描保持串行；
 - `03_check_processed_data.py`：按之前设定保持串行检查；
 - `04_build_traffic_pairs.py`：训练/评估源宿对生成可并行；
-- 环境运行时：同一时隙内不同 flow 的候选路径生成可按 `parallel_workers` 并行；
+- `06_build_candidates.py`：离线预计算各时隙候选路径，训练/评估时直接懒加载；
+- 若关闭 `candidates.enabled`，环境运行时才会在线生成候选路径；
 - `05_evaluate_mappo.py`：多个评估 episode 可用 `--workers` 并行。
 
 预处理长循环已接入 `tqdm` 进度条；如果运行环境暂未安装 `tqdm`，代码会自动退回
@@ -147,4 +156,38 @@ export OPENBLAS_NUM_THREADS=1
 
 ```bash
 python scripts/preprocess/04_build_traffic_pairs.py --config configs/env.yaml --workers 2
+python scripts/preprocess/06_build_candidates.py --config configs/env.yaml --split both --workers 128
 ```
+
+### GPU 使用边界
+
+当前只有 MAPPO 的 Actor/Critic 前向、反向传播和 PPO 更新会使用 CUDA。以下部分仍
+是 CPU-bound：STK 预处理、KDTree 建图、NetworkX K 最短路、future mutex 检测、
+`01_test_env_step.py` 环境冒烟测试和 proactive rule。也就是说，运行预处理或环境
+测试时 `nvidia-smi` 显示 0% 是正常的；训练阶段会打印实际使用的 CUDA device。
+
+当前训练瓶颈主要来自动态图读取。`configs/env.yaml` 已开启 `graph_preload: true`，
+会在环境初始化时一次性把 721 张图解压到内存，约占十几 GB 内存；在 720G 内存机器
+上建议保持开启。这样训练时每步不再反复解压 `graph_XXXX.npz`。
+
+`03_run_proactive_rule.py` 默认只运行 20 步；它用于观察规则是否能降低未来互斥，
+不需要每次跑满 721 步。若确实要完整规则基线，再显式加 `--full-episode`。
+
+由于当前 trainer 只支持 `num_envs=1`，且每步环境交互很重，A100 利用率也可能比较低。
+若要真正吃满 GPU，需要后续实现 vectorized env / batched rollout 或把候选路径与互斥
+检测改成更适合 GPU 的批量张量计算。
+
+## 第五阶段：Baseline 与 stress traffic 对比
+
+```bash
+python scripts/preprocess/06_build_mutex_stress_traffic.py --config configs/env.yaml
+python scripts/diagnose_future_mutex.py --config configs/env.yaml --traffic data/traffic/traffic_pairs_stress.npy
+python scripts/run_baselines.py --config configs/env.yaml --traffic data/traffic/traffic_pairs_stress.npy
+python scripts/evaluate_all_methods.py \
+  --env-config configs/env.yaml \
+  --mappo-config configs/mappo.yaml \
+  --checkpoint outputs/runs/<run_name>/checkpoints/latest.pt \
+  --traffic data/traffic/traffic_pairs_stress.npy
+```
+
+详见 [docs/baseline_evaluation.md](docs/baseline_evaluation.md)。

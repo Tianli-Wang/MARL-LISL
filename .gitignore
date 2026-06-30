@@ -10,6 +10,7 @@ data/sat_state/
 data/graphs/
 data/traffic/
 data/mutex/
+data/candidates/
 
 outputs/
 

@@ -47,6 +47,11 @@ class PathGenerator:
             search_graph = self._get_search_graph(graph)
             if source not in search_graph or dest not in search_graph:
                 return []
+            if self.num_candidates == 1:
+                path = nx.shortest_path(
+                    search_graph, int(source), int(dest), weight="weight"
+                )
+                return [list(map(int, path))]
             paths = nx.shortest_simple_paths(search_graph, int(source), int(dest), weight="weight")
             return [list(map(int, path)) for path in islice(paths, self.num_candidates)]
         except (nx.NetworkXNoPath, nx.NodeNotFound, nx.NetworkXError, ValueError):
