@@ -13,6 +13,8 @@ import numpy as np
 import pandas as pd
 from numpy.lib.format import open_memmap
 
+from marl_lisl.utils.progress import progress_iter
+
 
 REQUIRED_COLUMNS = [
     "TimeStep", "Time", "SatName", "X_km", "Y_km", "Z_km",
@@ -102,7 +104,7 @@ def _deduplicate(frame: pd.DataFrame) -> pd.DataFrame:
 
 def _worker_count(num_workers: int | None) -> int:
     if num_workers is None or num_workers <= 0:
-        return max(1, min(4, os.cpu_count() or 1))
+        return max(1, min(128, os.cpu_count() or 1))
     return max(1, int(num_workers))
 
 
@@ -159,7 +161,13 @@ def build_sat_state(
     time_rows: list[dict[str, object]] = []
     with ProcessPoolExecutor(max_workers=workers) as executor:
         scan_results = executor.map(_scan_file, files, chunksize=1)
-        for k, (path, result) in enumerate(zip(files, scan_results)):
+        scanned = progress_iter(
+            zip(files, scan_results),
+            total=len(files),
+            desc="01 扫描 STK 文件",
+            unit="file",
+        )
+        for k, (path, result) in enumerate(scanned):
             names, time_step, time_value, metadata_warning = result
             for name in names:
                 if name not in seen:
@@ -192,18 +200,21 @@ def build_sat_state(
         initializer=_init_convert_worker,
         initargs=(sat_to_id,),
     ) as executor:
-        for k, ids, values, unknown_count, invalid_state_count in executor.map(
-            _convert_file, tasks, chunksize=1
-        ):
+        converted = progress_iter(
+            executor.map(_convert_file, tasks, chunksize=1),
+            total=len(tasks),
+            desc="01 转换状态数组",
+            unit="slot",
+        )
+        for k, ids, values, unknown_count, invalid_state_count in converted:
             unknown_valid_total += unknown_count
             if invalid_state_count:
                 warnings.warn(
                     f"{files[k].name}: {invalid_state_count} valid rows with "
                     "non-finite state were invalidated"
-                )
+            )
             sat_state_m[k, ids, :] = values
             valid_mask[k, ids] = True
-            print(f"k={k:04d}, valid={len(ids)}")
 
     sat_state_m.flush()
     valid_mask.flush()

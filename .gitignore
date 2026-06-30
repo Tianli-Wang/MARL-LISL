@@ -8,6 +8,8 @@ venv/
 data/raw_stk/
 data/sat_state/
 data/graphs/
+data/traffic/
+data/mutex/
 
 outputs/
 

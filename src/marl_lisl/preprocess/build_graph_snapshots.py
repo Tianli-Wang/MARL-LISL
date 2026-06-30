@@ -11,6 +11,7 @@ from typing import Mapping
 import numpy as np
 
 from marl_lisl.utils.geometry import visible_segment_mask
+from marl_lisl.utils.progress import progress_iter
 
 try:
     from scipy.spatial import cKDTree
@@ -34,7 +35,7 @@ _GRAPH_PARAMS: dict[str, object] = {}
 
 def _worker_count(num_workers: int | None) -> int:
     if num_workers is None or num_workers <= 0:
-        return max(1, min(4, os.cpu_count() or 1))
+        return max(1, min(128, os.cpu_count() or 1))
     return max(1, int(num_workers))
 
 
@@ -106,7 +107,13 @@ def compute_residual_lifetimes(
 ) -> None:
     """Reverse-scan graph files, retaining only one timeslot dictionary in memory."""
     next_lifetime: dict[int, float] = {}
-    for k in range(num_steps - 1, -1, -1):
+    slots = progress_iter(
+        range(num_steps - 1, -1, -1),
+        total=num_steps,
+        desc="02 反向计算链路剩余寿命",
+        unit="slot",
+    )
+    for k in slots:
         path = graph_dir / f"graph_{k:04d}.npz"
         with np.load(path) as graph:
             edge_index = graph["edge_index"]
@@ -120,7 +127,6 @@ def compute_residual_lifetimes(
         edge_attr[:, 3] = lifetimes
         np.savez_compressed(path, edge_index=edge_index, edge_attr=edge_attr)
         next_lifetime = {int(key): float(value) for key, value in zip(keys, lifetimes)}
-        print(f"lifetime k={k:04d}, edges={edge_index.shape[1]}")
 
 
 def _init_graph_worker(
@@ -194,7 +200,7 @@ def build_graph_snapshots(
     stale = list(graph_dir.glob("graph_*.npz"))
     if stale:
         print(f"Removing {len(stale)} existing graph snapshots...")
-        for path in stale:
+        for path in progress_iter(stale, desc="02 删除旧图快照", unit="file"):
             path.unlink()
     workers = _worker_count(num_workers)
     print(f"parallel graph workers={workers}")
@@ -211,8 +217,19 @@ def build_graph_snapshots(
         initializer=_init_graph_worker,
         initargs=(state_path, mask_path, graph_dir, params),
     ) as executor:
-        for k, edge_count in executor.map(_build_and_save_snapshot, range(t_count), chunksize=1):
-            print(f"k={k:04d}, edges={edge_count}")
+        built = progress_iter(
+            executor.map(_build_and_save_snapshot, range(t_count), chunksize=1),
+            total=t_count,
+            desc="02 并行构建图快照",
+            unit="slot",
+        )
+        edge_counts = [edge_count for _k, edge_count in built]
+    if edge_counts:
+        print(
+            "edge_count: "
+            f"min={min(edge_counts)}, max={max(edge_counts)}, "
+            f"mean={float(np.mean(edge_counts)):.2f}"
+        )
 
     print("Computing residual link lifetimes by dependency-ordered reverse scan...")
     compute_residual_lifetimes(graph_dir, t_count, n_count, dt)

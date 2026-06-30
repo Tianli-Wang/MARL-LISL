@@ -2,3 +2,6 @@ numpy>=1.26
 pandas>=2.0
 scipy>=1.11
 pyyaml>=6.0
+networkx>=3.2
+torch>=2.1
+tqdm>=4.66

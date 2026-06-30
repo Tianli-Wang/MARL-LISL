@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check state arrays and randomly sampled graph snapshots."""
+"""功能：串行检查卫星状态数组和抽样图快照的数据质量。"""
 
 import argparse
 import sys
@@ -13,6 +13,7 @@ from marl_lisl.utils.io import load_yaml
 
 
 def main() -> None:
+    """按顺序读取若干图文件，打印形状、连边数和潜在异常。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=ROOT / "configs/preprocess.yaml")
     parser.add_argument("--samples", type=int, default=5)

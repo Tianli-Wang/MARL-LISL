@@ -4,8 +4,9 @@ fallback_raw_dir: raw_stk
 sat_state_dir: data/sat_state
 graph_root_dir: data/graphs
 
-# 0 表示自动选择（内部上限为 4，避免多进程建图耗尽内存）
-parallel_workers: 400
+# 512 CPU 线程 / 720G 内存机器推荐从 128 起步；若 IO 或内存仍很空，可试 192/256。
+# 0 表示自动选择，当前代码自动上限为 128。
+parallel_workers: 128
 
 dt: 5.0
 expected_num_steps: 721

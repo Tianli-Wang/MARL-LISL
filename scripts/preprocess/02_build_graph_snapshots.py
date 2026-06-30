@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build sparse LISL graph snapshots from satellite states."""
+"""功能：并行构建逐时隙 LISL 稀疏动态图快照。"""
 
 import argparse
 import sys
@@ -13,10 +13,11 @@ from marl_lisl.utils.io import load_yaml
 
 
 def main() -> None:
+    """读取卫星状态数组，并按配置中的 d_max 等参数生成 graph_XXXX.npz。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=ROOT / "configs/preprocess.yaml")
     parser.add_argument("--workers", type=int, default=None,
-                        help="Parallel workers; overrides parallel_workers in config")
+                        help="并行进程数；覆盖配置文件中的 parallel_workers")
     args = parser.parse_args()
     cfg = load_yaml(args.config)
     build_graph_snapshots(

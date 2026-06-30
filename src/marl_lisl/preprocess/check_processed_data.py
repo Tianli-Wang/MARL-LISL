@@ -7,6 +7,8 @@ from pathlib import Path
 
 import numpy as np
 
+from marl_lisl.utils.progress import progress_iter
+
 
 def _warn(message: str) -> None:
     warnings.warn(message, stacklevel=2)
@@ -95,7 +97,13 @@ def check_processed_data(
 
     if states.ndim == 3 and valid_mask.shape == states.shape[:2]:
         valid_nan = invalid_value = False
-        for k in range(states.shape[0]):
+        slots = progress_iter(
+            range(states.shape[0]),
+            total=states.shape[0],
+            desc="03 串行检查状态数组",
+            unit="slot",
+        )
+        for k in slots:
             mask = valid_mask[k]
             valid_nan |= bool(np.isnan(states[k, mask]).any())
             invalid_value |= bool(np.isfinite(states[k, ~mask]).any())
@@ -115,5 +123,5 @@ def check_processed_data(
     ).tolist())
     print(f"graph files={len(graph_paths)}, sampled={sample_count}, indices={indices}")
     num_sats = states.shape[1] if states.ndim >= 2 else 0
-    for index in indices:
+    for index in progress_iter(indices, desc="03 检查抽样图快照", unit="graph"):
         check_graph(graph_paths[index], num_sats)
