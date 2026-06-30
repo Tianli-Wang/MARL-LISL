@@ -31,16 +31,25 @@ class MAPPOPolicy(nn.Module):
         log_probs = distribution.log_prob(actions)
         entropy = distribution.entropy()
         value = self.critic(state_t)
+        value_np = value.detach().cpu().numpy().astype(np.float32)
+        if value_np.size == 1:
+            value_out = float(value_np.reshape(-1)[0])
+        else:
+            value_out = value_np
         return (
             actions.cpu().numpy().astype(np.int64),
             log_probs.cpu().numpy().astype(np.float32),
-            float(value.item()),
+            value_out,
             entropy.cpu().numpy().astype(np.float32),
         )
 
     @torch.no_grad()
-    def get_value(self, state) -> float:
-        return float(self.critic(to_tensor(state, self.device)).item())
+    def get_value(self, state):
+        value = self.critic(to_tensor(state, self.device))
+        value_np = value.detach().cpu().numpy().astype(np.float32)
+        if value_np.size == 1:
+            return float(value_np.reshape(-1)[0])
+        return value_np
 
     def evaluate_actions(self, obs, state, actions, action_mask):
         obs_t = to_tensor(obs, self.device)

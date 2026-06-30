@@ -2,9 +2,9 @@
 
 ## 目标
 
-本阶段把 future-mutex 多流环境接入单环境 MAPPO，完成动作采样、rollout、GAE、
-PPO 更新、日志、checkpoint 和确定性评估。目标是验证训练闭环，不追求论文最终
-性能，不使用 GNN，也不并行多个环境。
+本阶段把 future-mutex 多流环境接入 MAPPO，完成动作采样、并行 rollout、GAE、
+PPO 更新、日志、checkpoint 和确定性评估。默认配置面向 512 线程/A100 机器，
+通过 subprocess vectorized env 并行收集样本。
 
 ## 输入输出与网络
 
@@ -20,7 +20,7 @@ Critic 使用输入 LayerNorm 加普通 MLP，以适应 state 中边数、米、
 
 ## Rollout、GAE 与 PPO
 
-`RolloutBuffer` 保留 `(T, num_envs, ...)` 维度，当前只允许 `num_envs=1`。它存储
+`RolloutBuffer` 保留 `(T, num_envs, ...)` 维度，支持 `num_envs>=1`。它存储
 obs、state、mask、actions、old log-prob、reward、done 和 value。团队 reward
 对应全局 GAE advantage，并在 actor loss 中广播给所有 agents：
 
@@ -54,8 +54,8 @@ outputs/runs/<timestamp>_mappo_debug/
     └── latest.pt
 ```
 
-默认 500 updates 面向真实运行；冒烟调试时可减小 rollout length、updates、PPO
-epochs 和候选路径数。
+默认 500 updates 面向真实运行；冒烟调试时可减小 `num_envs`、rollout length、
+updates、PPO epochs 和候选路径数。
 
 ## 评估
 
@@ -74,6 +74,7 @@ mutex、outage、switch 和新链路数量。多个 episode 之间相互独立�
 ## 当前限制
 
 - 无 GNN，仅处理候选路径特征；
-- 只支持单环境，未实现 vectorized env；
+- vectorized env 使用 subprocess，环境交互仍是 CPU-bound；
 - 未实现 recurrent policy、学习率调度或复杂 value clipping；
-- 不追求最终论文性能，只验证最小 MAPPO 训练闭环。
+- 当前候选路径为离线 SciPy/Dijkstra 近似多路径；如需精确 K-shortest，可把
+  `path_weight.method` 改成 `yen`，但预处理会显著变慢。

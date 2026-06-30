@@ -55,6 +55,7 @@ class ObservationBuilder:
         flow_id: int | None = None,
         k: int | None = None,
         future_mutex_keep: float | None = None,
+        candidate_mutexes: np.ndarray | list[float] | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         obs = np.zeros((self.num_candidates + 1, self.obs_dim), dtype=np.float32)
         mask = np.zeros(self.num_candidates + 1, dtype=np.float32)
@@ -74,19 +75,25 @@ class ObservationBuilder:
             obs[0, 6] = keep_mutex
             obs[0, 7] = 0.0
         limited_candidates = candidate_paths[: self.num_candidates]
-        candidate_mutexes: list[float | None] = [None] * len(limited_candidates)
-        if mutex_enabled and limited_candidates and hasattr(
+        precomputed_mutexes = None
+        if candidate_mutexes is not None:
+            precomputed_mutexes = np.asarray(candidate_mutexes, dtype=np.float64)
+        fallback_mutexes: list[float | None] = [None] * len(limited_candidates)
+        if precomputed_mutexes is None and mutex_enabled and limited_candidates and hasattr(
             future_mutex_detector, "compute_candidate_mutexes"
         ):
             batch_results = future_mutex_detector.compute_candidate_mutexes(
                 all_paths, flow_id, limited_candidates, k
             )
-            candidate_mutexes = [float(value) for value, _info in batch_results]
+            fallback_mutexes = [float(value) for value, _info in batch_results]
         for index, path in enumerate(limited_candidates, start=1):
             obs[index] = self.path_features(graph, current_path, path)
             mask[index] = obs[index, 5]
             if mutex_enabled and mask[index] > 0:
-                cached_mutex = candidate_mutexes[index - 1]
+                if precomputed_mutexes is not None and index - 1 < len(precomputed_mutexes):
+                    cached_mutex = float(precomputed_mutexes[index - 1])
+                else:
+                    cached_mutex = fallback_mutexes[index - 1]
                 if cached_mutex is None:
                     cached_mutex, _ = future_mutex_detector.compute_candidate_mutex(
                         all_paths, flow_id, path, k

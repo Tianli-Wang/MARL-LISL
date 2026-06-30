@@ -47,7 +47,9 @@ python scripts/preprocess/02_build_graph_snapshots.py
 python scripts/preprocess/03_check_processed_data.py
 python scripts/preprocess/04_build_traffic_pairs.py --config configs/env.yaml --workers 2
 python scripts/preprocess/05_build_mutex.py --config configs/env.yaml
-python scripts/preprocess/06_build_candidates.py --config configs/env.yaml --split both --workers 128
+python scripts/preprocess/07_build_mutex_stress_traffic.py --config configs/env.yaml
+python scripts/preprocess/08_pack_graphs.py --config configs/env.yaml
+python scripts/preprocess/06_build_candidates.py --config configs/env.yaml --split all --workers 128
 ```
 
 前两个构建入口默认使用 `configs/preprocess.yaml` 中的 `parallel_workers: 128`，
@@ -76,6 +78,7 @@ MAPPO 环境读取方式见 [docs/preprocess.md](docs/preprocess.md)。
 
 ```bash
 python scripts/preprocess/04_build_traffic_pairs.py --config configs/env.yaml --workers 4
+python scripts/preprocess/08_pack_graphs.py --config configs/env.yaml
 python scripts/preprocess/06_build_candidates.py --config configs/env.yaml --split both --workers 128
 ```
 
@@ -86,12 +89,15 @@ python scripts/01_test_env_step.py --config configs/env.yaml --steps 20
 ```
 
 当前 `future_mutex.enabled: true`，首次运行环境前还需执行第三阶段的
-`05_build_mutex.py` 命令生成节点容量文件。当前 `candidates.enabled: true`，
-环境会直接读取 `data/candidates/{train,eval}/cand_XXXX.npz`，不再在线执行慢速
-NetworkX K 最短路；如果候选文件缺失，请先运行 `06_build_candidates.py`。
+`05_build_mutex.py` 命令生成节点容量文件。当前 `candidates.enabled: true` 且
+`candidates.backend: packed`，环境会直接 mmap 读取
+`data/candidates/{train,eval,stress}/_packed/`，不再在线执行慢速路径搜索；如果候选
+文件缺失或维度不匹配，请先运行 `06_build_candidates.py`。该脚本会先生成
+`cand_XXXX.npz`，再自动打包成查表用的 packed candidates。
 
 每条 flow 是一个 agent，动作 `0` 表示保持当前路径，`1..K` 表示切换到对应
-候选路径。`GraphStore` 只缓存最近 3 个时隙，环境不会一次加载全部 721 张图。
+候选路径。默认 `PackedGraphStore` / `PackedCandidateStore` 使用 memmap 查表；
+若改回 lazy 后端，环境只按缓存窗口懒加载图和候选。
 Observation、全局 state、reward、traffic 格式和当前实现边界详见
 [docs/env_design.md](docs/env_design.md)。
 
@@ -99,6 +105,7 @@ Observation、全局 state、reward、traffic 格式和当前实现边界详见
 
 ```bash
 python scripts/preprocess/05_build_mutex.py --config configs/env.yaml
+python scripts/preprocess/08_pack_graphs.py --config configs/env.yaml
 python scripts/preprocess/06_build_candidates.py --config configs/env.yaml --split both --workers 128
 python scripts/02_test_future_mutex.py --config configs/env.yaml
 python scripts/03_run_proactive_rule.py --config configs/env.yaml --steps 20
@@ -118,7 +125,7 @@ python scripts/05_evaluate_mappo.py \
 ```
 
 当前 MAPPO 使用共享候选动作 MLP Actor 和 centralized critic，支持 action mask、
-GAE、clipped PPO、CSV metrics 与 checkpoint。详见
+GAE、clipped PPO、多进程 rollout、CSV metrics 与 checkpoint。详见
 [docs/mappo_design.md](docs/mappo_design.md)。训练循环已接入 `tqdm` update 级进度条，
 会实时显示 reward、future mutex、outage、actor/critic loss 和 entropy。
 
@@ -128,7 +135,9 @@ GAE、clipped PPO、CSV metrics 与 checkpoint。详见
 - `02_build_graph_snapshots.py`：按图快照并行构建，剩余寿命反向扫描保持串行；
 - `03_check_processed_data.py`：按之前设定保持串行检查；
 - `04_build_traffic_pairs.py`：训练/评估源宿对生成可并行；
-- `06_build_candidates.py`：离线预计算各时隙候选路径，训练/评估时直接懒加载；
+- `08_pack_graphs.py`：把逐时隙图打包为共享 memmap，避免多进程反复解压 npz；
+- `06_build_candidates.py`：离线预计算各时隙候选路径，并自动打包为 packed candidates；
+- `09_pack_candidates.py`：已有 `cand_XXXX.npz` 时单独重建候选路径 pack；
 - 若关闭 `candidates.enabled`，环境运行时才会在线生成候选路径；
 - `05_evaluate_mappo.py`：多个评估 episode 可用 `--workers` 并行。
 
@@ -140,9 +149,10 @@ GAE、clipped PPO、CSV metrics 与 checkpoint。详见
 当前默认已按 512 CPU 线程、A100 80G、720G 内存调整：
 
 - `configs/preprocess.yaml`：`parallel_workers: 128`；
-- `configs/env.yaml`：`num_flows: 16`、`num_candidates: 8`、`parallel_workers: 32`、
-  `future_window: 24`；
-- `configs/mappo.yaml`：`device: cuda`、`rollout_length: 512`、Actor/Critic 网络加宽。
+- `configs/env.yaml`：`num_flows: 16`、`num_candidates: 8`、`parallel_workers: 128`、
+  `future_window: 24`、`graph_backend: packed`、`candidates.backend: packed`；
+- `configs/mappo.yaml`：`device: cuda`、`num_envs: 32`、`rollout_length: 256`、
+  Actor/Critic 网络加宽，并带轻量启发式 action prior。
 
 建议运行前设置 BLAS 线程为 1，避免多进程建图时每个进程再开很多内部线程：
 
@@ -152,30 +162,34 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 ```
 
-由于 flow 数和候选动作数已改变，请重新生成 traffic pairs：
+由于 flow 数和候选动作数已改变，请重新生成 traffic pairs 和候选路径：
 
 ```bash
 python scripts/preprocess/04_build_traffic_pairs.py --config configs/env.yaml --workers 2
-python scripts/preprocess/06_build_candidates.py --config configs/env.yaml --split both --workers 128
+python scripts/preprocess/07_build_mutex_stress_traffic.py --config configs/env.yaml
+python scripts/preprocess/08_pack_graphs.py --config configs/env.yaml
+python scripts/preprocess/06_build_candidates.py --config configs/env.yaml --split all --workers 128
 ```
 
 ### GPU 使用边界
 
 当前只有 MAPPO 的 Actor/Critic 前向、反向传播和 PPO 更新会使用 CUDA。以下部分仍
-是 CPU-bound：STK 预处理、KDTree 建图、NetworkX K 最短路、future mutex 检测、
+是 CPU-bound：STK 预处理、KDTree 建图、离线 SciPy/Dijkstra 候选路径预计算、
+future mutex 检测、
 `01_test_env_step.py` 环境冒烟测试和 proactive rule。也就是说，运行预处理或环境
 测试时 `nvidia-smi` 显示 0% 是正常的；训练阶段会打印实际使用的 CUDA device。
 
-当前训练瓶颈主要来自动态图读取。`configs/env.yaml` 已开启 `graph_preload: true`，
-会在环境初始化时一次性把 721 张图解压到内存，约占十几 GB 内存；在 720G 内存机器
-上建议保持开启。这样训练时每步不再反复解压 `graph_XXXX.npz`。
+当前训练瓶颈主要来自动态图和候选路径读取。`configs/env.yaml` 默认使用 packed
+graph/candidates：图快照被打包到 `data/graphs/dmax_2000km/_packed/`，候选路径被
+打包到 `data/candidates/<split>/_packed/`。多进程训练时这些 mmap 文件由 OS page
+cache 共享，不会让每个 worker 各自解压一份 10GB+ 的图数据。
 
 `03_run_proactive_rule.py` 默认只运行 20 步；它用于观察规则是否能降低未来互斥，
 不需要每次跑满 721 步。若确实要完整规则基线，再显式加 `--full-episode`。
 
-由于当前 trainer 只支持 `num_envs=1`，且每步环境交互很重，A100 利用率也可能比较低。
-若要真正吃满 GPU，需要后续实现 vectorized env / batched rollout 或把候选路径与互斥
-检测改成更适合 GPU 的批量张量计算。
+MAPPO trainer 已支持 subprocess vectorized env，通过 `num_envs` 并行收集 rollout。
+GPU 仍主要用于 actor/critic 前向、反向和 PPO 更新；环境 step、future mutex 与离线
+候选路径预计算仍是 CPU-bound。
 
 ## 第五阶段：Baseline 与 stress traffic 对比
 

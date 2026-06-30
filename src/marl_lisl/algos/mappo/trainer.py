@@ -26,8 +26,13 @@ class MAPPOTrainer:
         self.env = env
         self.config = mappo_config
         self.env_config = env_config
-        if int(mappo_config["num_envs"]) != 1:
-            raise NotImplementedError("Minimal MAPPO supports num_envs=1 only")
+        self.num_envs = int(mappo_config["num_envs"])
+        actual_num_envs = int(getattr(env, "num_envs", 1))
+        if actual_num_envs != self.num_envs:
+            raise ValueError(
+                f"MAPPO config num_envs={self.num_envs}, but environment exposes "
+                f"num_envs={actual_num_envs}"
+            )
         expected = (
             env.num_flows,
             env.num_candidates + 1,
@@ -46,12 +51,16 @@ class MAPPOTrainer:
             warnings.warn("CUDA requested but unavailable; falling back to CPU")
             requested_device = "cpu"
         self.device = torch.device(requested_device)
+        if "torch_num_threads" in mappo_config:
+            torch.set_num_threads(max(1, int(mappo_config["torch_num_threads"])))
         if self.device.type == "cuda":
             torch.set_float32_matmul_precision("high")
         actor_cfg, critic_cfg = mappo_config["actor"], mappo_config["critic"]
         actor = Actor(
             configured[2], int(actor_cfg["hidden_dim"]), int(actor_cfg["num_layers"]),
             actor_cfg.get("activation", "relu"),
+            bool(actor_cfg.get("normalize_input", False)),
+            actor_cfg.get("heuristic_prior"),
         )
         critic = Critic(
             configured[3], int(critic_cfg["hidden_dim"]), int(critic_cfg["num_layers"]),
@@ -63,7 +72,7 @@ class MAPPOTrainer:
             self.policy.parameters(), lr=float(mappo_config["learning_rate"])
         )
         self.buffer = RolloutBuffer(
-            int(mappo_config["rollout_length"]), 1, *configured[:3], configured[3],
+            int(mappo_config["rollout_length"]), self.num_envs, *configured[:3], configured[3],
             float(mappo_config["gamma"]), float(mappo_config["gae_lambda"]),
         )
         output_cfg = mappo_config["output"]
@@ -80,9 +89,9 @@ class MAPPOTrainer:
                 indent=2, default=str,
             )
         self.obs = self.state = self.action_mask = None
-        self.last_done = False
+        self.last_done = np.zeros(self.num_envs, dtype=bool)
         self.current_update = 0
-        self._episode_reward = 0.0
+        self._episode_reward = np.zeros(self.num_envs, dtype=np.float64)
 
     def _log_device_info(self) -> None:
         """Print where MAPPO neural-network computation will run."""
@@ -113,23 +122,26 @@ class MAPPOTrainer:
                 self.obs, self.state, self.action_mask, actions, log_probs,
                 reward, done, value, info,
             )
-            self._episode_reward += reward
-            self.last_done = bool(done)
-            if done:
-                completed_episode_rewards.append(self._episode_reward)
-                self._episode_reward = 0.0
+            reward_array = np.asarray(reward, dtype=np.float64).reshape(self.num_envs)
+            done_array = np.asarray(done, dtype=bool).reshape(self.num_envs)
+            self._episode_reward += reward_array
+            self.last_done = done_array
+            for env_id in np.flatnonzero(done_array):
+                completed_episode_rewards.append(float(self._episode_reward[env_id]))
+                self._episode_reward[env_id] = 0.0
+            if self.num_envs == 1 and bool(done_array[0]):
                 self.obs, self.state, self.action_mask = self.env.reset()
             else:
                 self.obs, self.state, self.action_mask = next_obs, next_state, next_mask
 
-        last_value = 0.0 if self.last_done else self.policy.get_value(self.state)
+        last_value = self.policy.get_value(self.state)
         self.buffer.compute_returns_and_advantages(last_value, self.last_done)
         infos = self.buffer.infos
         mean = lambda key: float(np.mean([float(info.get(key, 0.0)) for info in infos]))
         return {
             "mean_reward": float(self.buffer.rewards[: self.buffer.pos].mean()),
             "mean_episode_reward": float(np.mean(completed_episode_rewards))
-            if completed_episode_rewards else float(self._episode_reward),
+            if completed_episode_rewards else float(self._episode_reward.mean()),
             "mean_future_mutex": mean("future_mutex"),
             "mean_avg_delay": mean("avg_delay"),
             "mean_peak_delay": mean("peak_delay"),
@@ -140,6 +152,7 @@ class MAPPOTrainer:
 
     def update(self) -> dict[str, float]:
         loss_records: list[dict[str, float]] = []
+        target_kl = self.config.get("target_kl")
         for _ in range(int(self.config["ppo_epochs"])):
             for batch in self.buffer.get_batches(int(self.config["minibatch_size"])):
                 loss, info = compute_mappo_loss(
@@ -149,6 +162,7 @@ class MAPPOTrainer:
                     float(self.config["value_coef"]),
                     float(self.config["entropy_coef"]),
                     bool(self.config.get("normalize_advantages", True)),
+                    self.config.get("value_clip_range"),
                 )
                 if not torch.isfinite(loss):
                     warnings.warn(
@@ -162,6 +176,14 @@ class MAPPOTrainer:
                 )
                 self.optimizer.step()
                 loss_records.append(info)
+                if target_kl is not None and info["approx_kl"] > float(target_kl):
+                    break
+            if (
+                target_kl is not None
+                and loss_records
+                and loss_records[-1]["approx_kl"] > float(target_kl)
+            ):
+                break
         if not loss_records:
             raise RuntimeError("No finite PPO minibatch update was completed")
         result = {
@@ -270,6 +292,11 @@ class MAPPOTrainer:
 
     @torch.no_grad()
     def evaluate(self, num_episodes: int = 1) -> dict[str, float]:
+        if self.num_envs != 1:
+            raise NotImplementedError(
+                "MAPPOTrainer.evaluate expects a single env; use scripts/05_evaluate_mappo.py "
+                "for checkpoints trained with vectorized rollout."
+            )
         totals: list[dict[str, float]] = []
         for _ in range(int(num_episodes)):
             obs, state, mask = self.env.reset()
@@ -319,3 +346,8 @@ class MAPPOTrainer:
             self.optimizer.load_state_dict(checkpoint["optimizer"])
         self.current_update = int(checkpoint.get("update", 0))
         return checkpoint
+
+    def close(self) -> None:
+        close = getattr(self.env, "close", None)
+        if callable(close):
+            close()

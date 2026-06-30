@@ -124,6 +124,100 @@ class FutureMutexDetector:
         }
         return float(mutex_count), info
 
+    def compute_flow_candidate_mutexes(
+        self,
+        paths: list,
+        candidate_paths_by_flow: list[list[list[int] | None]],
+        k: int,
+    ) -> tuple[float, np.ndarray]:
+        """Compute keep mutex and all single-flow replacement mutex values.
+
+        This is the hot path for observations. It scans each future slot once,
+        builds the current path occupancy once, then updates only nodes touched
+        by a candidate replacement instead of copying a Counter for every action.
+        """
+        flow_count = len(paths)
+        max_candidates = max(
+            (len(candidates) for candidates in candidate_paths_by_flow),
+            default=0,
+        )
+        candidate_mutexes = np.zeros((flow_count, max_candidates), dtype=np.float64)
+        keep_mutex = 0.0
+
+        current_encoded = [self._encoded_path_edges(path) for path in paths]
+        current_nodes = [
+            self._occupied_nodes(path) if path is not None else []
+            for path in paths
+        ]
+        current_node_counts = [Counter(nodes) for nodes in current_nodes]
+        candidate_encoded = [
+            [self._encoded_path_edges(path) for path in candidates]
+            for candidates in candidate_paths_by_flow
+        ]
+        candidate_node_counts = [
+            [
+                Counter(self._occupied_nodes(path) if path is not None else [])
+                for path in candidates
+            ]
+            for candidates in candidate_paths_by_flow
+        ]
+
+        for delta in range(self.future_window + 1):
+            slot = int(k) + delta
+            try:
+                edge_keys = self._edge_keys(slot)
+            except FileNotFoundError:
+                if delta == 0:
+                    raise
+                break
+
+            discount = self.future_discount ** delta
+            base_occupancy: Counter[int] = Counter()
+            current_valid = np.zeros(flow_count, dtype=bool)
+            for flow_id, (encoded, nodes) in enumerate(
+                zip(current_encoded, current_nodes)
+            ):
+                if self._encoded_path_available(encoded, edge_keys):
+                    current_valid[flow_id] = True
+                    base_occupancy.update(nodes)
+
+            base_conflicts = 0
+            for node, count in base_occupancy.items():
+                base_conflicts += max(0, count - int(self.node_capacity[node]))
+            keep_mutex += discount * base_conflicts
+
+            for flow_id in range(flow_count):
+                old_counts = (
+                    current_node_counts[flow_id]
+                    if current_valid[flow_id]
+                    else Counter()
+                )
+                for candidate_id, encoded in enumerate(candidate_encoded[flow_id]):
+                    candidate_valid = self._encoded_path_available(encoded, edge_keys)
+                    new_counts = (
+                        candidate_node_counts[flow_id][candidate_id]
+                        if candidate_valid
+                        else Counter()
+                    )
+                    touched_nodes = set(old_counts) | set(new_counts)
+                    slot_conflicts = base_conflicts
+                    for node in touched_nodes:
+                        before = int(base_occupancy.get(node, 0))
+                        after = (
+                            before
+                            - int(old_counts.get(node, 0))
+                            + int(new_counts.get(node, 0))
+                        )
+                        capacity = int(self.node_capacity[node])
+                        slot_conflicts += max(0, after - capacity) - max(
+                            0, before - capacity
+                        )
+                    candidate_mutexes[flow_id, candidate_id] += (
+                        discount * slot_conflicts
+                    )
+
+        return float(keep_mutex), candidate_mutexes
+
     def compute_candidate_mutex(
         self,
         paths: list,

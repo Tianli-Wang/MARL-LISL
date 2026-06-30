@@ -12,9 +12,13 @@ import numpy as np
 
 from marl_lisl.envs.path_generator import PathGenerator
 from marl_lisl.store.graph_store import GraphStore
+from marl_lisl.store.packed_candidate_store import build_candidate_pack
+from marl_lisl.store.packed_graph_store import PackedGraphStore
 from marl_lisl.utils.progress import progress_iter
 
 _CANDIDATE_GRAPH_DIR: Path | None = None
+_CANDIDATE_GRAPH_BACKEND: str = "lazy"
+_CANDIDATE_GRAPH_PACK_DIR: Path | None = None
 _CANDIDATE_TRAFFIC: np.ndarray | None = None
 _CANDIDATE_NUM_CANDIDATES: int = 0
 _CANDIDATE_PATH_WEIGHT: dict[str, float] = {}
@@ -47,15 +51,20 @@ def pack_candidate_paths(
 
 def _init_candidate_worker(
     graph_dir: Path,
+    graph_backend: str,
+    graph_pack_dir: Path | None,
     traffic_pairs: np.ndarray,
     num_candidates: int,
     path_weight: dict,
     output_dir: Path,
 ) -> None:
     """Initialize read-only inputs once in each process-pool worker."""
-    global _CANDIDATE_GRAPH_DIR, _CANDIDATE_TRAFFIC, _CANDIDATE_NUM_CANDIDATES
+    global _CANDIDATE_GRAPH_DIR, _CANDIDATE_GRAPH_BACKEND, _CANDIDATE_GRAPH_PACK_DIR
+    global _CANDIDATE_TRAFFIC, _CANDIDATE_NUM_CANDIDATES
     global _CANDIDATE_PATH_WEIGHT, _CANDIDATE_OUTPUT_DIR
     _CANDIDATE_GRAPH_DIR = Path(graph_dir)
+    _CANDIDATE_GRAPH_BACKEND = str(graph_backend)
+    _CANDIDATE_GRAPH_PACK_DIR = None if graph_pack_dir is None else Path(graph_pack_dir)
     _CANDIDATE_TRAFFIC = np.asarray(traffic_pairs, dtype=np.float64)
     _CANDIDATE_NUM_CANDIDATES = int(num_candidates)
     _CANDIDATE_PATH_WEIGHT = dict(path_weight)
@@ -70,7 +79,15 @@ def _build_one_candidate_file(k: int) -> tuple[int, int, int]:
         or _CANDIDATE_OUTPUT_DIR is None
     ):
         raise RuntimeError("Candidate worker was not initialized")
-    graph_store = GraphStore(_CANDIDATE_GRAPH_DIR, cache_size=1)
+    if _CANDIDATE_GRAPH_BACKEND == "packed":
+        graph_store = PackedGraphStore(
+            _CANDIDATE_GRAPH_DIR,
+            pack_dir=_CANDIDATE_GRAPH_PACK_DIR,
+            cache_size=1,
+            build_if_missing=False,
+        )
+    else:
+        graph_store = GraphStore(_CANDIDATE_GRAPH_DIR, cache_size=1)
     graph = graph_store.get_graph(k)
     generator = PathGenerator(_CANDIDATE_NUM_CANDIDATES, _CANDIDATE_PATH_WEIGHT)
     generator.prepare_graph(graph)
@@ -129,6 +146,12 @@ def build_candidates_for_split(
     """Precompute and save candidates for one traffic split."""
     project_root = Path(project_root)
     graph_dir = project_root / config["graph_dir"]
+    graph_backend = str(config.get("graph_backend", "lazy")).lower()
+    graph_pack_dir = (
+        project_root / config["graph_pack_dir"]
+        if config.get("graph_pack_dir") is not None
+        else None
+    )
     traffic_path = project_root / _traffic_path_for_split(config, split)
     if not traffic_path.is_file():
         raise FileNotFoundError(
@@ -160,6 +183,8 @@ def build_candidates_for_split(
         initializer=_init_candidate_worker,
         initargs=(
             graph_dir,
+            graph_backend,
+            graph_pack_dir,
             traffic_pairs,
             int(config["num_candidates"]),
             dict(config["path_weight"]),
@@ -183,12 +208,16 @@ def build_candidates_for_split(
         "num_candidates": int(config["num_candidates"]),
         "traffic_path": str(traffic_path),
         "graph_dir": str(graph_dir),
+        "graph_backend": graph_backend,
+        "graph_pack_dir": None if graph_pack_dir is None else str(graph_pack_dir),
         "total_paths": total_paths,
         "non_empty_flow_slots": non_empty,
         "format": "nodes+offsets",
     }
     with (output_dir / "candidate_config.json").open("w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2, ensure_ascii=False)
+    if str(config.get("candidates", {}).get("backend", "npz")).lower() == "packed":
+        build_candidate_pack(output_dir, force=True)
     print(f"saved {split} candidates to {output_dir}")
     print(f"total_paths={total_paths}, non_empty_flow_slots={non_empty}")
     return output_dir

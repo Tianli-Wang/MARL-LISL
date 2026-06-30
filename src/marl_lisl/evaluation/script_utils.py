@@ -31,7 +31,14 @@ def load_env_config_for_traffic(
     traffic_path = resolve_project_path(project_root, traffic_path)
     if not traffic_path.is_file():
         raise FileNotFoundError(f"Traffic file not found: {traffic_path}")
-    for key in ("graph_dir", "traffic_dir", "traffic_train_path", "traffic_eval_path", "traffic_stress_path"):
+    for key in (
+        "graph_dir",
+        "graph_pack_dir",
+        "traffic_dir",
+        "traffic_train_path",
+        "traffic_eval_path",
+        "traffic_stress_path",
+    ):
         if key in config:
             config[key] = resolve_project_path(project_root, Path(config[key]))
     config["traffic_path"] = traffic_path
@@ -56,6 +63,8 @@ def load_env_config_for_traffic(
     config["future_mutex"]["node_mutex_path"] = resolve_project_path(
         project_root, Path(config["future_mutex"]["node_mutex_path"])
     )
+    config["env"] = dict(config["env"])
+    config["env"]["train_random_start"] = False
     return config
 
 

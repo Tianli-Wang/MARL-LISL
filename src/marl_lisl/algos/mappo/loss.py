@@ -14,6 +14,7 @@ def compute_mappo_loss(
     value_coef: float,
     entropy_coef: float,
     normalize_advantages: bool = True,
+    value_clip_range: float | None = None,
 ):
     device = policy.device
     obs = to_tensor(batch["obs"], device)
@@ -23,6 +24,7 @@ def compute_mappo_loss(
     old_log_probs = to_tensor(batch["old_log_probs"], device)
     returns = to_tensor(batch["returns"], device)
     advantages = to_tensor(batch["advantages"], device)
+    old_values = to_tensor(batch["old_values"], device)
     if normalize_advantages:
         advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8)
 
@@ -32,7 +34,16 @@ def compute_mappo_loss(
     surrogate_1 = ratio * advantages_agent
     surrogate_2 = torch.clamp(ratio, 1.0 - clip_ratio, 1.0 + clip_ratio) * advantages_agent
     actor_loss = -torch.minimum(surrogate_1, surrogate_2).mean()
-    critic_loss = torch.mean((values - returns) ** 2)
+    if value_clip_range is None:
+        critic_loss = torch.mean((values - returns) ** 2)
+    else:
+        value_clip_range = float(value_clip_range)
+        values_clipped = old_values + torch.clamp(
+            values - old_values, -value_clip_range, value_clip_range
+        )
+        critic_unclipped = (values - returns) ** 2
+        critic_clipped = (values_clipped - returns) ** 2
+        critic_loss = torch.maximum(critic_unclipped, critic_clipped).mean()
     entropy_mean = entropy.mean()
     total_loss = actor_loss + value_coef * critic_loss - entropy_coef * entropy_mean
     approx_kl = (old_log_probs - new_log_probs).mean()

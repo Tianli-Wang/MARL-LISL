@@ -30,6 +30,7 @@ class MAPPODeterministicAdapter:
 
 def _mappo_config(path: Path) -> dict:
     config = load_yaml(path)
+    config["num_envs"] = 1
     config["output"] = dict(config["output"])
     config["output"]["run_root"] = ROOT / config["output"]["run_root"]
     return config

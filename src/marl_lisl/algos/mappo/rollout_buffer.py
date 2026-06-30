@@ -19,8 +19,6 @@ class RolloutBuffer:
     ):
         self.rollout_length = int(rollout_length)
         self.num_envs = int(num_envs)
-        if self.num_envs != 1:
-            raise NotImplementedError("Minimal MAPPO currently supports num_envs=1 only")
         self.num_agents = int(num_agents)
         self.num_actions = int(num_actions)
         self.obs_dim = int(obs_dim)
@@ -56,25 +54,48 @@ class RolloutBuffer:
         if self.pos >= self.rollout_length:
             raise RuntimeError("RolloutBuffer is full; reset it before adding")
         t = self.pos
-        self.obs[t, 0] = np.asarray(obs, np.float32)
-        self.states[t, 0] = np.asarray(state, np.float32)
-        self.action_masks[t, 0] = np.asarray(action_mask, np.float32)
-        self.actions[t, 0] = np.asarray(actions, np.int64)
-        self.log_probs[t, 0] = np.asarray(log_probs, np.float32)
-        self.rewards[t, 0] = float(reward)
-        self.dones[t, 0] = float(done)
-        self.values[t, 0] = float(value)
-        self.infos.append({} if info is None else info)
+        obs_array = np.asarray(obs, np.float32)
+        state_array = np.asarray(state, np.float32)
+        mask_array = np.asarray(action_mask, np.float32)
+        action_array = np.asarray(actions, np.int64)
+        log_prob_array = np.asarray(log_probs, np.float32)
+        reward_array = np.asarray(reward, np.float32).reshape(self.num_envs)
+        done_array = np.asarray(done, np.float32).reshape(self.num_envs)
+        value_array = np.asarray(value, np.float32).reshape(self.num_envs)
+
+        if self.num_envs == 1 and obs_array.shape == self.obs.shape[2:]:
+            self.obs[t, 0] = obs_array
+            self.states[t, 0] = state_array
+            self.action_masks[t, 0] = mask_array
+            self.actions[t, 0] = action_array
+            self.log_probs[t, 0] = log_prob_array
+        else:
+            self.obs[t] = obs_array
+            self.states[t] = state_array
+            self.action_masks[t] = mask_array
+            self.actions[t] = action_array
+            self.log_probs[t] = log_prob_array
+        self.rewards[t] = reward_array
+        self.dones[t] = done_array
+        self.values[t] = value_array
+        if info is None:
+            self.infos.extend({} for _ in range(self.num_envs))
+        elif isinstance(info, list):
+            self.infos.extend(info)
+        else:
+            self.infos.append(info)
         self.pos += 1
 
-    def compute_returns_and_advantages(self, last_value: float, last_done: bool) -> None:
+    def compute_returns_and_advantages(self, last_value, last_done) -> None:
         if self.pos == 0:
             raise RuntimeError("Cannot compute GAE for an empty rollout")
+        last_value = np.asarray(last_value, dtype=np.float32).reshape(self.num_envs)
+        last_done = np.asarray(last_done, dtype=np.float32).reshape(self.num_envs)
         last_advantage = np.zeros(self.num_envs, dtype=np.float32)
         for t in range(self.pos - 1, -1, -1):
             if t == self.pos - 1:
-                next_value = np.full(self.num_envs, float(last_value), np.float32)
-                next_nonterminal = 1.0 - float(last_done)
+                next_value = last_value
+                next_nonterminal = 1.0 - last_done
             else:
                 next_value = self.values[t + 1]
                 next_nonterminal = 1.0 - self.dones[t]
