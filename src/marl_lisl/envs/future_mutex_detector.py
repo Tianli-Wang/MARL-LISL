@@ -6,7 +6,7 @@ from collections import Counter, OrderedDict
 
 import numpy as np
 
-from marl_lisl.utils.graph import edge_path_from_node_path
+from marl_lisl.utils.graph import encode_path_edges
 
 
 class FutureMutexDetector:
@@ -17,6 +17,7 @@ class FutureMutexDetector:
         future_window: int,
         future_discount: float = 0.95,
         include_source_dest_nodes: bool = False,
+        path_cache_size: int = 200_000,
     ):
         self.graph_store = graph_store
         self.node_capacity = np.asarray(node_capacity, dtype=np.int32)
@@ -31,6 +32,12 @@ class FutureMutexDetector:
         # Only encoded sparse edge keys for the active future window are retained.
         self._edge_key_cache: OrderedDict[int, np.ndarray] = OrderedDict()
         self._cache_size = self.future_window + 1
+        self._path_cache_size = max(0, int(path_cache_size))
+        self._path_cache: OrderedDict[
+            tuple[int, ...] | None,
+            tuple[np.ndarray, tuple[int, ...], Counter[int]],
+        ] = OrderedDict()
+        self._empty_counter: Counter[int] = Counter()
 
     def _edge_keys(self, k: int) -> np.ndarray:
         if k in self._edge_key_cache:
@@ -51,14 +58,35 @@ class FutureMutexDetector:
     def _path_available(self, path: list[int] | None, edge_keys: np.ndarray) -> bool:
         return self._encoded_path_available(self._encoded_path_edges(path), edge_keys)
 
+    def _path_key(self, path: list[int] | tuple[int, ...] | None) -> tuple[int, ...] | None:
+        if path is None or len(path) < 2:
+            return None
+        return tuple(int(node) for node in path)
+
+    def _path_info(
+        self, path: list[int] | tuple[int, ...] | None
+    ) -> tuple[np.ndarray, tuple[int, ...], Counter[int]]:
+        key = self._path_key(path)
+        if key in self._path_cache:
+            self._path_cache.move_to_end(key)
+            return self._path_cache[key]
+        if key is None:
+            info = (np.empty(0, dtype=np.int64), (), self._empty_counter)
+        else:
+            encoded = encode_path_edges(key, self.num_sats)
+            nodes = key if self.include_source_dest_nodes else key[1:-1]
+            occupied = tuple(node for node in nodes if 0 <= int(node) < self.num_sats)
+            info = (encoded, occupied, Counter(occupied))
+        if self._path_cache_size:
+            self._path_cache[key] = info
+            self._path_cache.move_to_end(key)
+            while len(self._path_cache) > self._path_cache_size:
+                self._path_cache.popitem(last=False)
+        return info
+
     def _encoded_path_edges(self, path: list[int] | None) -> np.ndarray:
         """Encode a node path into sparse integer edge keys once for reuse."""
-        if path is None or len(path) < 2:
-            return np.empty(0, dtype=np.int64)
-        return np.fromiter(
-            (u * self.num_sats + v for u, v in edge_path_from_node_path(path)),
-            dtype=np.int64,
-        )
+        return self._path_info(path)[0]
 
     def _encoded_path_available(self, encoded: np.ndarray, edge_keys: np.ndarray) -> bool:
         """Check whether all encoded path edges exist in one graph snapshot."""
@@ -68,8 +96,7 @@ class FutureMutexDetector:
         return bool(np.all(indices < len(edge_keys)) and np.all(edge_keys[indices] == encoded))
 
     def _occupied_nodes(self, path: list[int]) -> list[int]:
-        nodes = path if self.include_source_dest_nodes else path[1:-1]
-        return [int(node) for node in nodes if 0 <= int(node) < self.num_sats]
+        return list(self._path_info(path)[1])
 
     def compute_future_mutex(self, paths: list, k: int) -> tuple[float, dict]:
         mutex_count = 0.0
@@ -79,10 +106,7 @@ class FutureMutexDetector:
         first_conflict_nodes: list[int] = []
         evaluated_slots = 0
         encoded_paths = [self._encoded_path_edges(path) for path in paths]
-        occupied_nodes = [
-            self._occupied_nodes(path) if path is not None else []
-            for path in paths
-        ]
+        occupied_nodes = [self._path_info(path)[1] for path in paths]
 
         for delta in range(self.future_window + 1):
             slot = int(k) + delta
@@ -145,19 +169,16 @@ class FutureMutexDetector:
         keep_mutex = 0.0
 
         current_encoded = [self._encoded_path_edges(path) for path in paths]
-        current_nodes = [
-            self._occupied_nodes(path) if path is not None else []
-            for path in paths
-        ]
-        current_node_counts = [Counter(nodes) for nodes in current_nodes]
+        current_infos = [self._path_info(path) for path in paths]
+        current_nodes = [info[1] for info in current_infos]
+        current_node_counts = [info[2] for info in current_infos]
         candidate_encoded = [
             [self._encoded_path_edges(path) for path in candidates]
             for candidates in candidate_paths_by_flow
         ]
         candidate_node_counts = [
             [
-                Counter(self._occupied_nodes(path) if path is not None else [])
-                for path in candidates
+                self._path_info(path)[2] for path in candidates
             ]
             for candidates in candidate_paths_by_flow
         ]

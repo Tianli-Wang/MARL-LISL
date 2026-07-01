@@ -1,59 +1,108 @@
+# 随机种子，控制 PyTorch/NumPy/Python 随机性。
 seed: 42
+# 训练设备；cuda 使用 A100，若无 GPU 代码会回退到 CPU。
 device: cuda
+# PyTorch 计算线程数；环境进程很多时不要设太大，避免线程过度竞争。
 torch_num_threads: 8
 
-multiprocessing_start_method: spawn
-num_envs: 32
-rollout_length: 256
-total_updates: 500
+# 多进程环境启动方式；Linux 上 fork 启动快，适合本项目只读 memmap 数据。
+multiprocessing_start_method: fork
+# 并行环境数量；512 线程服务器上 64 个 env 能显著降低 rollout 时间。
+num_envs: 64
+# 每个 env 每次 update 采样多少步；总样本数为 num_envs * rollout_length。
+rollout_length: 32
+# PPO 总更新次数；当前配置约几十分钟级训练一轮。
+total_updates: 250
 
+# 必须与 env.yaml 中 num_flows 对齐。
 num_agents: 16
+# 动作数 = 1 个保持动作 + num_candidates 个候选路径动作。
 num_actions: 9
+# 单个动作候选的观测特征维度。
 obs_dim: 8
+# centralized critic 的全局 state 维度。
 state_dim: 7
 
+# 折扣因子。
 gamma: 0.99
+# GAE(lambda) 参数，越接近 1 越平滑但方差可能更高。
 gae_lambda: 0.95
 
+# PPO policy clipping 范围。
 clip_ratio: 0.2
+# value clipping 范围，稳定 critic 更新。
 value_clip_range: 0.2
+# 近似 KL 超过该值时提前停止本轮 PPO epoch。
 target_kl: 0.03
-ppo_epochs: 4
+# 每个 rollout 重复训练多少轮 PPO。
+ppo_epochs: 3
+# PPO minibatch 大小；样本数为 num_envs * rollout_length。
 minibatch_size: 1024
 
+# Adam 学习率。
 learning_rate: 0.0002
+# critic loss 权重。
 value_coef: 0.5
+# entropy bonus 权重；鼓励探索，过大时会导致切换过多。
 entropy_coef: 0.003
+# 梯度裁剪阈值。
 max_grad_norm: 0.5
 
+# 是否标准化 advantage，通常保持 true。
 normalize_advantages: true
 
+# Actor 网络配置：共享 MLP，为每个候选动作输出 logit。
 actor:
+  # Actor 隐藏层宽度。
   hidden_dim: 256
+  # Actor 隐藏层数量。
   num_layers: 3
+  # 激活函数，可选 relu/tanh/elu/gelu。
   activation: relu
+  # 是否对动作特征做 LayerNorm。
   normalize_input: true
+  # 启发式 action prior：给策略一个接近规则 baseline 的初始偏置，减少早期乱切换。
   heuristic_prior:
+    # 是否启用启发式 prior。
     enabled: true
+    # prior 总缩放系数。
     scale: 1.0
+    # 时延惩罚系数。
     delay: 4.0
+    # 建链时延惩罚系数。
     setup: 4.0
+    # 新链路数量惩罚系数。
     new_link: 0.08
+    # 跳数惩罚系数；当前为 0，不额外惩罚跳数。
     hops: 0.0
+    # future mutex 惩罚系数。
     mutex: 5.0
+    # B_avoid 奖励系数；当前为 0，由 mutex 项间接体现。
     avoid: 0.0
+    # 对保持动作的小偏置，减少无意义频繁切换。
     keep_bonus: 0.05
 
+# Centralized critic 网络配置。
 critic:
+  # Critic 隐藏层宽度。
   hidden_dim: 512
+  # Critic 隐藏层数量。
   num_layers: 3
+  # 激活函数。
   activation: relu
 
+# 日志、checkpoint 与在线评估频率。
 logging:
+  # 每多少个 update 打印一次训练指标。
   log_interval: 5
+  # 每多少个 update 保存一次 checkpoint。
   save_interval: 50
+  # 训练过程中评估间隔；0 表示关闭在线评估。
   eval_interval: 0
 
+# 输出目录配置。
 output:
+  # 训练 run 根目录。
   run_root: outputs/runs
+  # 实验名会拼接到 timestamp 后面。
   experiment_name: mappo_a100_16flow_vec

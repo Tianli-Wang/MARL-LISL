@@ -54,7 +54,7 @@ outputs/runs/<timestamp>_mappo_debug/
     └── latest.pt
 ```
 
-默认 500 updates 面向真实运行；冒烟调试时可减小 `num_envs`、rollout length、
+默认 250 updates 面向真实运行；冒烟调试时可减小 `num_envs`、rollout length、
 updates、PPO epochs 和候选路径数。
 
 ## 评估

@@ -1,26 +1,42 @@
+# 原始 STK 文本数据目录；规范路径优先。
 raw_dir: data/raw_stk/by_step
+# 兼容旧目录；raw_dir 不存在时尝试读取这里。
 fallback_raw_dir: raw_stk
 
+# 卫星状态数组输出目录。
 sat_state_dir: data/sat_state
+# 图快照输出根目录；实际会按 d_max_name 生成子目录。
 graph_root_dir: data/graphs
 
 # 512 CPU 线程 / 720G 内存机器推荐从 128 起步；若 IO 或内存仍很空，可试 192/256。
 # 0 表示自动选择，当前代码自动上限为 128。
 parallel_workers: 128
 
+# STK 数据时隙间隔，单位秒。
 dt: 5.0
+# 预期时隙数量，用于数据完整性检查。
 expected_num_steps: 721
+# 预期卫星数量，用于数据完整性检查。
 expected_num_sats: 6080
 
+# 建图最大星间链路距离，单位米。
 d_max_m: 2000000.0
+# d_max 对应的输出目录名称。
 d_max_name: dmax_2000km
 
+# 地球半径，单位米；用于几何/遮挡相关计算。
 earth_radius_m: 6371000.0
+# 光速，单位 m/s；用于传播时延计算。
 speed_of_light_m_s: 299792458.0
 
+# 默认链路/节点容量；当前主要用于后续互斥容量初始化。
 default_capacity: 1.0
 
+# 新建链路 setup delay 计算参数。
 setup_delay:
+  # 固定建链时延，单位秒。
   base_s: 0.01
+  # 距离项系数。
   distance_coef: 1.0e-8
+  # 相对角速度项系数。
   angular_rate_coef: 0.1

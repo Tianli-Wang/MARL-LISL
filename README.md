@@ -151,7 +151,7 @@ GAE、clipped PPO、多进程 rollout、CSV metrics 与 checkpoint。详见
 - `configs/preprocess.yaml`：`parallel_workers: 128`；
 - `configs/env.yaml`：`num_flows: 16`、`num_candidates: 8`、`parallel_workers: 128`、
   `future_window: 24`、`graph_backend: packed`、`candidates.backend: packed`；
-- `configs/mappo.yaml`：`device: cuda`、`num_envs: 32`、`rollout_length: 256`、
+- `configs/mappo.yaml`：`device: cuda`、`num_envs: 64`、`rollout_length: 32`、
   Actor/Critic 网络加宽，并带轻量启发式 action prior。
 
 建议运行前设置 BLAS 线程为 1，避免多进程建图时每个进程再开很多内部线程：

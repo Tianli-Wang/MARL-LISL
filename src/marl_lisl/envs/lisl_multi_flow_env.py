@@ -118,6 +118,7 @@ class LISLMultiFlowEnv:
         self.future_mutex_enabled = bool(mutex_cfg.get("enabled", False))
         self.mutex_store: MutexStore | None = None
         self.future_mutex_detector: FutureMutexDetector | None = None
+        self.future_mutex_observation_detector: FutureMutexDetector | None = None
         if self.future_mutex_enabled:
             self.mutex_store = MutexStore(Path(mutex_cfg["node_mutex_path"]))
             node_capacity = self.mutex_store.get_node_capacity()
@@ -125,13 +126,28 @@ class LISLMultiFlowEnv:
                 raise ValueError(
                     f"node mutex length {len(node_capacity)} != num_sats {self.num_sats}"
                 )
+            future_window = int(mutex_cfg["future_window"])
+            observation_window = int(mutex_cfg.get("observation_window", future_window))
+            path_cache_size = int(mutex_cfg.get("path_cache_size", 200_000))
             self.future_mutex_detector = FutureMutexDetector(
                 self.graph_store,
                 node_capacity,
-                int(mutex_cfg["future_window"]),
+                future_window,
                 float(mutex_cfg.get("future_discount", 0.95)),
                 bool(mutex_cfg.get("include_source_dest_nodes", False)),
+                path_cache_size=path_cache_size,
             )
+            if observation_window == future_window:
+                self.future_mutex_observation_detector = self.future_mutex_detector
+            else:
+                self.future_mutex_observation_detector = FutureMutexDetector(
+                    self.graph_store,
+                    node_capacity,
+                    observation_window,
+                    float(mutex_cfg.get("future_discount", 0.95)),
+                    bool(mutex_cfg.get("include_source_dest_nodes", False)),
+                    path_cache_size=path_cache_size,
+                )
         # Per-env RNG (seeded distinctly per worker) for scenario diversity.
         self._rng = np.random.default_rng(int(config.get("seed", 0)))
         # Random-start training: each reset begins at a different timeslot so the
@@ -177,11 +193,12 @@ class LISLMultiFlowEnv:
         )
         masks = np.zeros((self.num_flows, self.num_candidates + 1), dtype=np.float32)
         candidate_mutexes = None
-        if self.future_mutex_detector is not None and hasattr(
-            self.future_mutex_detector, "compute_flow_candidate_mutexes"
+        observation_detector = self.future_mutex_observation_detector
+        if observation_detector is not None and hasattr(
+            observation_detector, "compute_flow_candidate_mutexes"
         ):
             future_mutex_keep, candidate_mutexes = (
-                self.future_mutex_detector.compute_flow_candidate_mutexes(
+                observation_detector.compute_flow_candidate_mutexes(
                     self.current_paths, candidates, self.k
                 )
             )
@@ -192,7 +209,7 @@ class LISLMultiFlowEnv:
                 graph,
                 self.current_paths[flow_id],
                 candidates[flow_id],
-                future_mutex_detector=self.future_mutex_detector,
+                future_mutex_detector=observation_detector,
                 all_paths=self.current_paths,
                 flow_id=flow_id,
                 k=self.k,

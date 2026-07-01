@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
+
 import numpy as np
 
 from marl_lisl.utils.graph import (
@@ -18,28 +20,67 @@ class ObservationBuilder:
     def __init__(self, num_candidates: int, num_sats: int):
         self.num_candidates = int(num_candidates)
         self.num_sats = int(num_sats)
+        self._path_cache: OrderedDict[
+            tuple[int, tuple[int, ...] | None],
+            tuple[np.ndarray | None, set[tuple[int, int]], float, float, float, float],
+        ] = OrderedDict()
+        self._path_cache_size = 200_000
+
+    def _path_key(self, path: list[int] | tuple[int, ...] | None) -> tuple[int, ...] | None:
+        if path is None or len(path) < 2:
+            return None
+        return tuple(int(node) for node in path)
+
+    def _cached_path_info(
+        self, graph: dict, path: list[int] | tuple[int, ...] | None
+    ) -> tuple[np.ndarray | None, set[tuple[int, int]], float, float, float, float]:
+        key = (id(graph["edge_index"]), self._path_key(path))
+        cached = self._path_cache.get(key)
+        if cached is not None:
+            self._path_cache.move_to_end(key)
+            return cached
+        if key[1] is None:
+            info = (None, set(), 0.0, 0.0, 0.0, 0.0)
+        else:
+            edge_ids = edge_ids_for_node_path(graph, key[1], self.num_sats)
+            if edge_ids is None:
+                info = (None, set(), 0.0, 0.0, 0.0, 0.0)
+            else:
+                attrs = graph["edge_attr"]
+                info = (
+                    edge_ids,
+                    edge_path_from_node_path(key[1]),
+                    float(attrs[edge_ids, 1].sum()),
+                    float(attrs[edge_ids, 3].min()),
+                    float(len(key[1]) - 1),
+                    1.0,
+                )
+        self._path_cache[key] = info
+        self._path_cache.move_to_end(key)
+        while len(self._path_cache) > self._path_cache_size:
+            self._path_cache.popitem(last=False)
+        return info
 
     def path_features(
         self, graph: dict, current_path: list[int] | None, path: list[int] | None
     ) -> np.ndarray:
         result = np.zeros(self.obs_dim, dtype=np.float32)
-        if not path or len(path) < 2:
-            return result
-        edge_ids = edge_ids_for_node_path(graph, path, self.num_sats)
+        edge_ids, path_edges, propagation, min_lifetime, hops, feasible = (
+            self._cached_path_info(graph, path)
+        )
         if edge_ids is None:
             return result
-        path_edges = edge_path_from_node_path(path)
-        old_edges = edge_path_from_node_path(current_path)
+        _old_ids, old_edges, *_ = self._cached_path_info(graph, current_path)
         new_edges = path_edges - old_edges
         new_ids = edge_ids_for_edge_set(graph, new_edges, self.num_sats) if new_edges else None
         attrs = graph["edge_attr"]
         result[:] = (
-            float(attrs[edge_ids, 1].sum()),
+            propagation,
             float(attrs[new_ids, 2].max()) if new_ids is not None and len(new_ids) else 0.0,
-            float(attrs[edge_ids, 3].min()),
+            min_lifetime,
             float(len(new_edges)),
-            float(len(path) - 1),
-            1.0,
+            hops,
+            feasible,
             0.0,
             0.0,
         )
