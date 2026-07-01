@@ -1,207 +1,202 @@
 # MARL-LISL
 
-低轨巨星座星间激光通信（LISL）多流路由项目。当前已完成 STK 卫星状态到
-稀疏动态图快照的转换、可执行 `reset/step` 的最小多源多宿路由环境，以及未来
-节点互斥检测、主动规避规则和最小 MAPPO 训练闭环。
+面向低轨巨星座星间激光通信（LISL）的多业务流协同路由项目。项目包含 STK
+轨迹预处理、动态稀疏图构建、离线候选路径、未来节点互斥检测、规则 baseline
+和 MAPPO 训练评估闭环。
 
-## 目录职责
+## 目录
 
 ```text
-data/       只放数据
-src/        只放源码
-scripts/    只放运行入口
-configs/    只放参数
-docs/       只放说明文档
+configs/    环境、预处理与 MAPPO 参数
+data/       原始数据和全部预处理产物
+docs/       环境、算法及实验说明
+scripts/    用户直接运行的命令行入口
+src/        可复用的核心实现
 ```
 
-核心实现位于 `src/marl_lisl/preprocess/`，入口脚本只读取配置并调用核心函数。
-所有图按时隙单独保存，便于后续环境懒加载。
-
-第二阶段源码位于 `src/marl_lisl/store/` 和 `src/marl_lisl/envs/`；运行入口仍只
-放在 `scripts/`，环境参数集中在 `configs/env.yaml`。
-
-根目录运行脚本已按推荐执行顺序编号：先环境/互斥冒烟测试，再规则策略、MAPPO
-训练与评估；`scripts/preprocess/` 仍按数据预处理流水线编号。
+入口脚本只负责解析参数和调用 `src/marl_lisl/` 中的实现。运行脚本共享
+`src/marl_lisl/utils/runtime_config.py`，统一解析 graph、traffic、candidate 和 mutex
+路径，避免训练、测试、评估使用不同的数据集合。
 
 ## 安装
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate       # Windows PowerShell 使用 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-## 数据位置
+## 脚本功能
 
-将 721 个 STK 文件放在 `data/raw_stk/by_step/`。当前数据已按时间顺序命名为
-`step_0000.txt` 至 `step_0720.txt`。如果规范目录不存在，程序会兼容读取项目
-根目录下的 `raw_stk/`。
+### 运行与评估入口
 
-## 运行
+| 脚本 | 功能 |
+|---|---|
+| `scripts/01_test_env.py` | 统一的环境冒烟测试；支持基础 `reset/step`、future mutex 详情以及 train/eval/stress 数据集 |
+| `scripts/03_run_proactive_rule.py` | 逐时隙运行主动互斥规避规则，打印 keep/after mutex、动作、奖励和耗时 |
+| `scripts/04_train_mappo.py` | 创建单环境或多进程向量环境，训练 MAPPO 并保存指标和 checkpoint |
+| `scripts/05_evaluate_mappo.py` | 确定性评估 MAPPO checkpoint，支持多 episode 和多进程 |
+| `scripts/06_evaluate_methods.py` | 统一评估全部 baseline、轻量互斥诊断策略和可选 MAPPO，并输出同口径 CSV |
 
-在项目根目录依次执行：
+### 数据预处理入口
+
+| 脚本 | 功能 |
+|---|---|
+| `scripts/preprocess/01_build_sat_state.py` | 把逐时隙 STK 文件转换为固定卫星编号的状态数组和有效掩码 |
+| `scripts/preprocess/02_build_graph_snapshots.py` | 构建逐时隙 LISL 稀疏图，并反向计算链路剩余寿命 |
+| `scripts/preprocess/03_check_processed_data.py` | 检查状态数组和抽样图快照的形状、数值及边结构 |
+| `scripts/preprocess/04_build_traffic.py` | 统一生成普通 train/eval traffic 和 future-mutex stress traffic |
+| `scripts/preprocess/05_build_mutex.py` | 生成每颗卫星的节点中继容量数组 |
+| `scripts/preprocess/06_build_candidates.py` | 离线计算 train/eval/stress 每个时隙、每条 flow 的候选路径 |
+| `scripts/preprocess/08_pack_data.py` | 统一把图快照和候选路径打包成多进程可共享的 memmap 查找表 |
+
+## 完整数据准备流程
+
+将 721 个 STK 文件放到 `data/raw_stk/by_step/`，默认名称为
+`step_0000.txt` 至 `step_0720.txt`，然后在项目根目录运行：
 
 ```bash
-python scripts/preprocess/01_build_sat_state.py
-python scripts/preprocess/02_build_graph_snapshots.py
-python scripts/preprocess/03_check_processed_data.py
-python scripts/preprocess/04_build_traffic_pairs.py --config configs/env.yaml --workers 2
-python scripts/preprocess/05_build_mutex.py --config configs/env.yaml
-python scripts/preprocess/07_build_mutex_stress_traffic.py --config configs/env.yaml
-python scripts/preprocess/08_pack_graphs.py --config configs/env.yaml
-python scripts/preprocess/06_build_candidates.py --config configs/env.yaml --split all --workers 128
-```
-
-前两个构建入口默认使用 `configs/preprocess.yaml` 中的 `parallel_workers: 128`，
-也可以通过 `--workers N` 覆盖。03 检查脚本已设为串行；链路剩余寿命因存在
-反向时序依赖，也按顺序计算。
-
-也可显式指定配置：
-
-```bash
+# 1. STK → 固定编号卫星状态
 python scripts/preprocess/01_build_sat_state.py --config configs/preprocess.yaml
+
+# 2. 卫星状态 → 721 张动态稀疏图
 python scripts/preprocess/02_build_graph_snapshots.py --config configs/preprocess.yaml
+
+# 3. 检查状态和图数据
 python scripts/preprocess/03_check_processed_data.py --config configs/preprocess.yaml
-```
 
-输出位置：
+# 4. 生成 train/eval 和 stress 三套业务流
+python scripts/preprocess/04_build_traffic.py --config configs/env.yaml --split all --workers 2
 
-- `data/sat_state/`：固定卫星编号的状态数组与时间索引；
-- `data/graphs/dmax_2000km/`：逐时隙稀疏动态图快照。
-
-参数见 [configs/preprocess.yaml](configs/preprocess.yaml)，数据格式、边特征和
-MAPPO 环境读取方式见 [docs/preprocess.md](docs/preprocess.md)。
-
-## 第二阶段：最小路由环境
-
-先基于 `graph_0000` 生成固定的训练与评估 traffic pairs：
-
-```bash
-python scripts/preprocess/04_build_traffic_pairs.py --config configs/env.yaml --workers 4
-python scripts/preprocess/08_pack_graphs.py --config configs/env.yaml
-python scripts/preprocess/06_build_candidates.py --config configs/env.yaml --split both --workers 128
-```
-
-再用合法随机动作执行环境：
-
-```bash
-python scripts/01_test_env_step.py --config configs/env.yaml --steps 20
-```
-
-当前 `future_mutex.enabled: true`，首次运行环境前还需执行第三阶段的
-`05_build_mutex.py` 命令生成节点容量文件。当前 `candidates.enabled: true` 且
-`candidates.backend: packed`，环境会直接 mmap 读取
-`data/candidates/{train,eval,stress}/_packed/`，不再在线执行慢速路径搜索；如果候选
-文件缺失或维度不匹配，请先运行 `06_build_candidates.py`。该脚本会先生成
-`cand_XXXX.npz`，再自动打包成查表用的 packed candidates。
-
-每条 flow 是一个 agent，动作 `0` 表示保持当前路径，`1..K` 表示切换到对应
-候选路径。默认 `PackedGraphStore` / `PackedCandidateStore` 使用 memmap 查表；
-若改回 lazy 后端，环境只按缓存窗口懒加载图和候选。
-Observation、全局 state、reward、traffic 格式和当前实现边界详见
-[docs/env_design.md](docs/env_design.md)。
-
-## 第三阶段：未来互斥与主动规避
-
-```bash
+# 5. 生成节点互斥容量
 python scripts/preprocess/05_build_mutex.py --config configs/env.yaml
-python scripts/preprocess/08_pack_graphs.py --config configs/env.yaml
-python scripts/preprocess/06_build_candidates.py --config configs/env.yaml --split both --workers 128
-python scripts/02_test_future_mutex.py --config configs/env.yaml
+
+# 6. 先把图打包为共享 memmap，供并行候选路径预处理读取
+python scripts/preprocess/08_pack_data.py --config configs/env.yaml --target graphs
+
+# 7. 离线生成三套候选路径；packed 后端下生成完成后会自动打包
+python scripts/preprocess/06_build_candidates.py \
+  --config configs/env.yaml --split all --workers 128
+
+# 8. 如需单独重建或校验全部 pack
+python scripts/preprocess/08_pack_data.py \
+  --config configs/env.yaml --target all --split all --force
+```
+
+前两个预处理步骤可用 `--workers N` 覆盖 `configs/preprocess.yaml` 中的并行数。
+链路剩余寿命存在反向时序依赖，因此图生成可以并行，寿命回填必须串行。
+
+主要输出为：
+
+```text
+data/sat_state/                         卫星状态、有效掩码和时间索引
+data/graphs/dmax_2000km/                逐时隙图及 _packed 图查找表
+data/traffic/                           train/eval/stress traffic pairs
+data/mutex/node_mutex.npy               节点中继容量
+data/candidates/{train,eval,stress}/    离线候选路径及 _packed 查找表
+```
+
+只要图、traffic、`num_flows`、`num_candidates` 或 `path_weight` 改变，就应重新生成
+候选路径；图快照发生变化时还应重新生成 graph pack。
+
+## 环境与 future mutex 测试
+
+统一测试入口取代了原来的 `01_test_env_step.py` 和
+`02_test_future_mutex.py`：
+
+```bash
+# 同时检查环境 API 和 future mutex
+python scripts/01_test_env.py --config configs/env.yaml --mode all --split train --steps 20
+
+# 只做基础 reset/step 冒烟测试
+python scripts/01_test_env.py --config configs/env.yaml --mode basic --steps 5
+
+# 使用 stress traffic 专门检查互斥压力
+python scripts/01_test_env.py --config configs/env.yaml --mode mutex --split stress --steps 20
+```
+
+每条 flow 是一个 agent。动作 `0` 保持当前路径，动作 `1..K` 切换到对应离线候选
+路径。每个候选动作的 observation 为：
+
+```text
+[T_prop, T_setup, R_min, N_new, hop_count, feasible, A_mutex, B_avoid]
+```
+
+其中 `A_mutex` 是执行该动作后的未来节点冲突量，`B_avoid` 是相对保持动作减少的
+冲突量。默认只统计路径中继节点，不统计源宿卫星。
+
+## 主动规则 baseline
+
+```bash
+# 默认快速运行 20 步
 python scripts/03_run_proactive_rule.py --config configs/env.yaml --steps 20
+
+# 显式运行完整 episode
+python scripts/03_run_proactive_rule.py --config configs/env.yaml --full-episode
 ```
 
-环境 observation 已扩展为 8 维候选路径特征，新增 `A_mutex`（动作后的未来冲突）
-和 `B_avoid`（相对保持动作的规避收益）；全局 state 增至 7 维，reward 增加未来
-互斥惩罚。`ProactiveRulePolicy` 用于验证提前切换能否降低未来共享中继节点冲突。
+脚本打印 `future_mutex_keep`、联合动作后的 `future_mutex_after`、实际规避量、路径
+切换、新链路和掉线数量。它是逐步诊断入口，不用于批量方法对比。
 
-## 第四阶段：最小 MAPPO 闭环
+## MAPPO 训练与专项评估
 
 ```bash
-python scripts/04_train_mappo.py --env-config configs/env.yaml --mappo-config configs/mappo.yaml
+python scripts/04_train_mappo.py \
+  --env-config configs/env.yaml --mappo-config configs/mappo.yaml
+
 python scripts/05_evaluate_mappo.py \
-  --env-config configs/env.yaml --mappo-config configs/mappo.yaml \
-  --checkpoint outputs/runs/<run>/checkpoints/latest.pt --episodes 4 --workers 4
-```
-
-当前 MAPPO 使用共享候选动作 MLP Actor 和 centralized critic，支持 action mask、
-GAE、clipped PPO、多进程 rollout、CSV metrics 与 checkpoint。详见
-[docs/mappo_design.md](docs/mappo_design.md)。训练循环已接入 `tqdm` update 级进度条，
-会实时显示 reward、future mutex、outage、actor/critic loss 和 entropy。
-
-## 并行计算说明
-
-- `01_build_sat_state.py`：按 STK 时隙文件并行解析与写入；
-- `02_build_graph_snapshots.py`：按图快照并行构建，剩余寿命反向扫描保持串行；
-- `03_check_processed_data.py`：按之前设定保持串行检查；
-- `04_build_traffic_pairs.py`：训练/评估源宿对生成可并行；
-- `08_pack_graphs.py`：把逐时隙图打包为共享 memmap，避免多进程反复解压 npz；
-- `06_build_candidates.py`：离线预计算各时隙候选路径，并自动打包为 packed candidates；
-- `09_pack_candidates.py`：已有 `cand_XXXX.npz` 时单独重建候选路径 pack；
-- 若关闭 `candidates.enabled`，环境运行时才会在线生成候选路径；
-- `05_evaluate_mappo.py`：多个评估 episode 可用 `--workers` 并行。
-
-预处理长循环已接入 `tqdm` 进度条；如果运行环境暂未安装 `tqdm`，代码会自动退回
-普通输出。建议执行 `pip install -r requirements.txt` 以获得完整进度显示。
-
-## 高性能机器参数
-
-当前默认已按 512 CPU 线程、A100 80G、720G 内存调整：
-
-- `configs/preprocess.yaml`：`parallel_workers: 128`；
-- `configs/env.yaml`：`num_flows: 16`、`num_candidates: 8`、`parallel_workers: 128`、
-  `future_window: 24`、`graph_backend: packed`、`candidates.backend: packed`；
-- `configs/mappo.yaml`：`device: cuda`、`num_envs: 64`、`rollout_length: 32`、
-  Actor/Critic 网络加宽，并带轻量启发式 action prior。
-
-建议运行前设置 BLAS 线程为 1，避免多进程建图时每个进程再开很多内部线程：
-
-```bash
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
-```
-
-由于 flow 数和候选动作数已改变，请重新生成 traffic pairs 和候选路径：
-
-```bash
-python scripts/preprocess/04_build_traffic_pairs.py --config configs/env.yaml --workers 2
-python scripts/preprocess/07_build_mutex_stress_traffic.py --config configs/env.yaml
-python scripts/preprocess/08_pack_graphs.py --config configs/env.yaml
-python scripts/preprocess/06_build_candidates.py --config configs/env.yaml --split all --workers 128
-```
-
-### GPU 使用边界
-
-当前只有 MAPPO 的 Actor/Critic 前向、反向传播和 PPO 更新会使用 CUDA。以下部分仍
-是 CPU-bound：STK 预处理、KDTree 建图、离线 SciPy/Dijkstra 候选路径预计算、
-future mutex 检测、
-`01_test_env_step.py` 环境冒烟测试和 proactive rule。也就是说，运行预处理或环境
-测试时 `nvidia-smi` 显示 0% 是正常的；训练阶段会打印实际使用的 CUDA device。
-
-当前训练瓶颈主要来自动态图和候选路径读取。`configs/env.yaml` 默认使用 packed
-graph/candidates：图快照被打包到 `data/graphs/dmax_2000km/_packed/`，候选路径被
-打包到 `data/candidates/<split>/_packed/`。多进程训练时这些 mmap 文件由 OS page
-cache 共享，不会让每个 worker 各自解压一份 10GB+ 的图数据。
-
-`03_run_proactive_rule.py` 默认只运行 20 步；它用于观察规则是否能降低未来互斥，
-不需要每次跑满 721 步。若确实要完整规则基线，再显式加 `--full-episode`。
-
-MAPPO trainer 已支持 subprocess vectorized env，通过 `num_envs` 并行收集 rollout。
-GPU 仍主要用于 actor/critic 前向、反向和 PPO 更新；环境 step、future mutex 与离线
-候选路径预计算仍是 CPU-bound。
-
-## 第五阶段：Baseline 与 stress traffic 对比
-
-```bash
-python scripts/preprocess/06_build_mutex_stress_traffic.py --config configs/env.yaml
-python scripts/diagnose_future_mutex.py --config configs/env.yaml --traffic data/traffic/traffic_pairs_stress.npy
-python scripts/run_baselines.py --config configs/env.yaml --traffic data/traffic/traffic_pairs_stress.npy
-python scripts/evaluate_all_methods.py \
   --env-config configs/env.yaml \
   --mappo-config configs/mappo.yaml \
-  --checkpoint outputs/runs/<run_name>/checkpoints/latest.pt \
-  --traffic data/traffic/traffic_pairs_stress.npy
+  --checkpoint outputs/runs/<run>/checkpoints/latest.pt \
+  --episodes 4 --workers 4
 ```
 
-详见 [docs/baseline_evaluation.md](docs/baseline_evaluation.md)。
+训练支持 subprocess vectorized env、共享 Actor、centralized Critic、action mask、
+GAE、clipped PPO、CSV metrics 和 checkpoint。`num_agents` 必须等于 `num_flows`，
+`num_actions` 必须等于 `num_candidates + 1`。
+
+## 统一方法评估
+
+`06_evaluate_methods.py` 取代了原来的 `run_baselines.py`、
+`diagnose_future_mutex.py` 和 `evaluate_all_methods.py`。
+
+```bash
+# 所有 baseline
+python scripts/06_evaluate_methods.py \
+  --traffic data/traffic/traffic_pairs_stress.npy \
+  --methods baselines
+
+# 只运行 Maintain、Shortest、Proactive，诊断 stress traffic 是否有互斥压力
+python scripts/06_evaluate_methods.py \
+  --traffic data/traffic/traffic_pairs_stress.npy \
+  --methods diagnose --max-steps 100
+
+# baseline 与 MAPPO 使用同一 traffic、同一指标口径比较
+python scripts/06_evaluate_methods.py \
+  --env-config configs/env.yaml \
+  --mappo-config configs/mappo.yaml \
+  --checkpoint outputs/runs/<run>/checkpoints/latest.pt \
+  --traffic data/traffic/traffic_pairs_stress.npy \
+  --methods all \
+  --output outputs/tables/stress_compare.csv
+```
+
+如果传入配置之外的自定义 traffic，统一配置加载器会关闭离线候选路径并回退在线
+路径生成，避免把 train/eval/stress 候选路径错配给其他源宿对。
+
+## 性能说明
+
+- `graph_backend: packed`：图快照通过共享 memmap 读取，避免多进程重复解压 NPZ。
+- `candidates.backend: packed`：候选路径离线计算，环境不再逐时隙运行最短路搜索。
+- future mutex 会缓存路径边编码和中继节点，降低候选动作之间的重复检查。
+- GPU 只负责 MAPPO Actor/Critic 的前向、反向与 PPO 更新；环境 step、预处理和
+  future mutex 仍是 CPU 任务。
+- 多环境训练时建议把 `OMP_NUM_THREADS`、`MKL_NUM_THREADS`、
+  `OPENBLAS_NUM_THREADS` 设为 1，避免每个环境进程再次创建大量 BLAS 线程。
+
+更详细的数据格式和算法说明见：
+
+- [预处理设计](docs/preprocess.md)
+- [环境设计](docs/env_design.md)
+- [MAPPO 设计](docs/mappo_design.md)
+- [Baseline 评估](docs/baseline_evaluation.md)

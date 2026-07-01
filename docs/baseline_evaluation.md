@@ -25,7 +25,7 @@ Stress traffic 从 `graph_0000.npz` 随机采样源宿对，计算 shortest path
 生成命令：
 
 ```bash
-python scripts/preprocess/06_build_mutex_stress_traffic.py --config configs/env.yaml
+python scripts/preprocess/04_build_traffic.py --config configs/env.yaml --split stress
 ```
 
 输出：
@@ -41,9 +41,10 @@ data/traffic/traffic_stress_config.json
 ## 诊断 future mutex 压力
 
 ```bash
-python scripts/diagnose_future_mutex.py \
-  --config configs/env.yaml \
-  --traffic data/traffic/traffic_pairs_stress.npy
+python scripts/06_evaluate_methods.py \
+  --env-config configs/env.yaml \
+  --traffic data/traffic/traffic_pairs_stress.npy \
+  --methods diagnose
 ```
 
 如果所有方法 `future_mutex == 0`，该场景不能验证 proactive mutex avoidance。
@@ -51,9 +52,11 @@ python scripts/diagnose_future_mutex.py \
 ## 运行 baseline 对比
 
 ```bash
-python scripts/run_baselines.py \
-  --config configs/env.yaml \
-  --traffic data/traffic/traffic_pairs_stress.npy
+python scripts/06_evaluate_methods.py \
+  --env-config configs/env.yaml \
+  --traffic data/traffic/traffic_pairs_stress.npy \
+  --methods baselines \
+  --output outputs/tables/baseline_compare.csv
 ```
 
 结果保存到：
@@ -65,11 +68,13 @@ outputs/tables/baseline_compare.csv
 ## MAPPO + Baselines 统一对比
 
 ```bash
-python scripts/evaluate_all_methods.py \
+python scripts/06_evaluate_methods.py \
   --env-config configs/env.yaml \
   --mappo-config configs/mappo.yaml \
   --checkpoint outputs/runs/<run_name>/checkpoints/latest.pt \
-  --traffic data/traffic/traffic_pairs_stress.npy
+  --traffic data/traffic/traffic_pairs_stress.npy \
+  --methods all \
+  --output outputs/tables/all_methods_compare.csv
 ```
 
 结果保存到：

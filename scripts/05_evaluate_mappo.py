@@ -14,38 +14,19 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from marl_lisl.algos.mappo import MAPPOTrainer
 from marl_lisl.envs import LISLMultiFlowEnv
-from marl_lisl.utils.config import load_yaml
+from marl_lisl.utils.runtime_config import (
+    load_runtime_env_config,
+    load_runtime_mappo_config,
+)
 
 
 def _configs(env_path: Path, mappo_path: Path) -> tuple[dict, dict]:
     """加载评估所需配置，并切换到 evaluation traffic pairs。"""
-    env_config = load_yaml(env_path)
-    for key in (
-        "graph_dir",
-        "graph_pack_dir",
-        "traffic_dir",
-        "traffic_train_path",
-        "traffic_eval_path",
-        "traffic_stress_path",
-    ):
-        if key in env_config:
-            env_config[key] = ROOT / env_config[key]
-    env_config["traffic_path"] = env_config["traffic_eval_path"]
-    candidates_cfg = dict(env_config.get("candidates", {}))
-    for key in ("train_dir", "eval_dir", "stress_dir"):
-        if key in candidates_cfg:
-            candidates_cfg[key] = ROOT / candidates_cfg[key]
-    env_config["candidates"] = candidates_cfg
-    if candidates_cfg.get("enabled", False):
-        env_config["candidate_dir"] = candidates_cfg["eval_dir"]
-    env_config["future_mutex"] = dict(env_config["future_mutex"])
-    env_config["future_mutex"]["node_mutex_path"] = ROOT / env_config["future_mutex"]["node_mutex_path"]
-    mappo_config = load_yaml(mappo_path)
+    env_config = load_runtime_env_config(
+        env_path, ROOT, traffic_split="eval", train_random_start=False
+    )
+    mappo_config = load_runtime_mappo_config(mappo_path, ROOT)
     mappo_config["num_envs"] = 1
-    mappo_config["output"] = dict(mappo_config["output"])
-    mappo_config["output"]["run_root"] = ROOT / mappo_config["output"]["run_root"]
-    env_config["env"] = dict(env_config["env"])
-    env_config["env"]["train_random_start"] = False
     return env_config, mappo_config
 
 

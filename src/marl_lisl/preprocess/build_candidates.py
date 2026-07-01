@@ -156,7 +156,7 @@ def build_candidates_for_split(
     if not traffic_path.is_file():
         raise FileNotFoundError(
             f"Traffic file not found: {traffic_path}. "
-            "Run scripts/preprocess/04_build_traffic_pairs.py first."
+            "Run scripts/preprocess/04_build_traffic.py first."
         )
     traffic_pairs = np.load(traffic_path)
     if traffic_pairs.ndim != 2 or traffic_pairs.shape[1] != 3:

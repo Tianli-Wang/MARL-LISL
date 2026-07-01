@@ -21,7 +21,7 @@ agent 共享团队 reward。当前仍不包含 MAPPO、actor/critic 或训练缓
 当前 demand 固定为 `1.0`。运行以下命令从 `graph_0000` 生成可达的训练和评估对：
 
 ```bash
-python scripts/preprocess/04_build_traffic_pairs.py --config configs/env.yaml
+python scripts/preprocess/04_build_traffic.py --config configs/env.yaml --split normal
 python scripts/preprocess/06_build_candidates.py --config configs/env.yaml --split both
 ```
 
@@ -92,7 +92,7 @@ next_obs, next_state, next_action_mask, reward, done, info = env.step(actions)
 形状分别为 `(F, K+1, 8)`、`(7,)` 和 `(F, K+1)`。测试合法随机动作：
 
 ```bash
-python scripts/01_test_env_step.py --config configs/env.yaml --steps 20
+python scripts/01_test_env.py --config configs/env.yaml --mode basic --steps 20
 ```
 
 由于默认配置已启用 future mutex，首次创建环境前必须先运行下文的
@@ -121,7 +121,7 @@ python scripts/preprocess/05_build_mutex.py --config configs/env.yaml
 检查未来互斥特征：
 
 ```bash
-python scripts/02_test_future_mutex.py --config configs/env.yaml
+python scripts/01_test_env.py --config configs/env.yaml --mode mutex
 ```
 
 ## ProactiveRulePolicy

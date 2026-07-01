@@ -13,7 +13,7 @@ class TrafficStore:
         if not self.traffic_path.is_file():
             raise FileNotFoundError(
                 f"Traffic file not found: {self.traffic_path}. "
-                "Run scripts/preprocess/04_build_traffic_pairs.py first."
+                "Run scripts/preprocess/04_build_traffic.py --split normal first."
             )
         pairs = np.load(self.traffic_path)
         if pairs.ndim != 2 or pairs.shape[1] != 3:

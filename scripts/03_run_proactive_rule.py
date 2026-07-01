@@ -10,26 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from marl_lisl.envs import LISLMultiFlowEnv, ProactiveRulePolicy
-from marl_lisl.utils.config import load_yaml
-
-
-def _resolved_config(path: Path) -> dict:
-    """加载环境配置，并将所有数据文件路径转换为绝对路径。"""
-    config = load_yaml(path)
-    for key in ("graph_dir", "traffic_dir", "traffic_train_path", "traffic_eval_path"):
-        config[key] = ROOT / config[key]
-    candidates_cfg = dict(config.get("candidates", {}))
-    for key in ("train_dir", "eval_dir"):
-        if key in candidates_cfg:
-            candidates_cfg[key] = ROOT / candidates_cfg[key]
-    config["candidates"] = candidates_cfg
-    if candidates_cfg.get("enabled", False):
-        config["candidate_dir"] = candidates_cfg["train_dir"]
-    config["future_mutex"] = dict(config["future_mutex"])
-    config["future_mutex"]["node_mutex_path"] = (
-        ROOT / config["future_mutex"]["node_mutex_path"]
-    )
-    return config
+from marl_lisl.utils.runtime_config import load_runtime_env_config
 
 
 def main() -> None:
@@ -51,11 +32,14 @@ def main() -> None:
     parser.add_argument("--num-candidates", type=int, default=None, help="临时覆盖每条流的候选路径数")
     parser.add_argument("--parallel-workers", type=int, default=None, help="临时覆盖环境候选路径并行线程数")
     args = parser.parse_args()
-    config = _resolved_config(args.config)
+    config = load_runtime_env_config(args.config, ROOT, traffic_split="train")
     if args.future_window is not None:
         config["future_mutex"]["future_window"] = max(0, int(args.future_window))
     if args.num_candidates is not None:
         config["num_candidates"] = max(1, int(args.num_candidates))
+        # 离线候选文件的动作维度是在预处理时固定的。临时覆盖 K 后必须回退
+        # 在线生成，否则会把旧 pack 中的路径错误解释为新的动作集合。
+        config["candidates"]["enabled"] = False
     if args.parallel_workers is not None:
         config["parallel_workers"] = max(1, int(args.parallel_workers))
     env = LISLMultiFlowEnv(config)
@@ -75,7 +59,9 @@ def main() -> None:
     }
     for _ in range(limit):
         step_start = time.perf_counter()
-        keep, _ = env.future_mutex_detector.compute_future_mutex(env.current_paths, env.k)
+        # 当前 observation 已保存同一时隙、同一组路径的精确 keep mutex，直接
+        # 复用可以避免规则评估脚本额外发起一次组合互斥查询。
+        keep = env.current_future_mutex
         actions = policy.act(obs, action_mask)
         obs, _state, action_mask, reward, done, info = env.step(actions)
         after = float(info["future_mutex"])
