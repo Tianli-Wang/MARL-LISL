@@ -38,7 +38,7 @@ PPO 使用 clipped surrogate actor loss、return MSE critic loss和 entropy bonu
 先依次生成图、traffic pairs 和 node mutex，再运行：
 
 ```bash
-python scripts/04_train_mappo.py \
+python scripts/run/03_train_mappo.py \
   --env-config configs/env.yaml \
   --mappo-config configs/mappo.yaml
 ```
@@ -60,7 +60,7 @@ updates、PPO epochs 和候选路径数。
 ## 评估
 
 ```bash
-python scripts/05_evaluate_mappo.py \
+python scripts/run/04_evaluate_mappo.py \
   --env-config configs/env.yaml \
   --mappo-config configs/mappo.yaml \
   --checkpoint outputs/runs/<run>/checkpoints/latest.pt \

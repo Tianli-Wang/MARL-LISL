@@ -13,7 +13,7 @@ import numpy as np
 from marl_lisl.envs.path_generator import PathGenerator
 from marl_lisl.store.graph_store import GraphStore
 from marl_lisl.store.packed_candidate_store import build_candidate_pack
-from marl_lisl.store.packed_graph_store import PackedGraphStore
+from marl_lisl.store.packed_graph_store import PackedGraphStore, build_graph_pack
 from marl_lisl.utils.progress import progress_iter
 
 _CANDIDATE_GRAPH_DIR: Path | None = None
@@ -152,6 +152,22 @@ def build_candidates_for_split(
         if config.get("graph_pack_dir") is not None
         else None
     )
+    if graph_backend == "packed":
+        # packed graph 必须在创建进程池之前由主进程一次性准备。worker 中保持
+        # build_if_missing=False，能够避免大量子进程同时检测并写入同一组 memmap。
+        effective_pack_dir = (
+            graph_pack_dir if graph_pack_dir is not None else graph_dir / "_packed"
+        )
+        meta_path = effective_pack_dir / "meta.json"
+        if not meta_path.is_file():
+            if bool(config.get("graph_pack_build_if_missing", True)):
+                print(f"graph pack missing; building once in parent: {effective_pack_dir}")
+                build_graph_pack(graph_dir, pack_dir=effective_pack_dir)
+            else:
+                raise FileNotFoundError(
+                    f"Graph pack not found: {meta_path}. Run "
+                    "scripts/preprocess/06_pack_data.py --target graphs first."
+                )
     traffic_path = project_root / _traffic_path_for_split(config, split)
     if not traffic_path.is_file():
         raise FileNotFoundError(
@@ -169,7 +185,7 @@ def build_candidates_for_split(
     output_dir.mkdir(parents=True, exist_ok=True)
     stale = list(output_dir.glob("cand_*.npz"))
     if stale:
-        for path in progress_iter(stale, desc=f"06 删除旧 {split} candidates", unit="file"):
+        for path in progress_iter(stale, desc=f"05 删除旧 {split} candidates", unit="file"):
             path.unlink()
 
     num_steps = int(config["num_steps"])
@@ -195,7 +211,7 @@ def build_candidates_for_split(
             progress_iter(
                 executor.map(_build_one_candidate_file, range(num_steps), chunksize=1),
                 total=num_steps,
-                desc=f"06 预计算 {split} candidates",
+                desc=f"05 预计算 {split} candidates",
                 unit="slot",
             )
         )

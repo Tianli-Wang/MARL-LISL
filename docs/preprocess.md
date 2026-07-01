@@ -36,7 +36,7 @@ python scripts/preprocess/01_build_sat_state.py
 python scripts/preprocess/02_build_graph_snapshots.py
 python scripts/preprocess/03_check_processed_data.py
 python scripts/preprocess/04_build_traffic.py --config configs/env.yaml --split all
-python scripts/preprocess/06_build_candidates.py --config configs/env.yaml --split both
+python scripts/preprocess/05_build_candidates.py --config configs/env.yaml --split both
 ```
 
 三个脚本均支持显式指定 YAML 配置：

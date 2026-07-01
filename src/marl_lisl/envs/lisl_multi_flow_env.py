@@ -224,6 +224,16 @@ class LISLMultiFlowEnv:
             }
         return self.future_mutex_detector.compute_future_mutex(paths, k)
 
+    def compute_current_future_mutex(self) -> tuple[float, dict]:
+        """按 reward 使用的完整未来窗口计算当前路径保持动作的互斥量。
+
+        observation 可以配置更短的 ``observation_window`` 来降低训练开销，
+        因而不能直接用 state 最后一维与 step 后的完整 ``future_mutex`` 比较。
+        该公共接口固定使用 ``future_mutex_detector``，保证规则诊断脚本中的
+        keep/after 两个值采用同一窗口和同一折扣定义。
+        """
+        return self._compute_future_mutex(self.current_paths, self.k)
+
     def _build_state(self, graph: dict, future_mutex: float = 0.0) -> np.ndarray:
         attrs = graph["edge_attr"]
         summary = graph.get("_state_summary")

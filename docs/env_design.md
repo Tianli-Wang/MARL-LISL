@@ -22,7 +22,7 @@ agent 共享团队 reward。当前仍不包含 MAPPO、actor/critic 或训练缓
 
 ```bash
 python scripts/preprocess/04_build_traffic.py --config configs/env.yaml --split normal
-python scripts/preprocess/06_build_candidates.py --config configs/env.yaml --split both
+python scripts/preprocess/05_build_candidates.py --config configs/env.yaml --split both
 ```
 
 ## 候选路径与动作
@@ -92,7 +92,7 @@ next_obs, next_state, next_action_mask, reward, done, info = env.step(actions)
 形状分别为 `(F, K+1, 8)`、`(7,)` 和 `(F, K+1)`。测试合法随机动作：
 
 ```bash
-python scripts/01_test_env.py --config configs/env.yaml --mode basic --steps 20
+python scripts/run/01_test_env.py --config configs/env.yaml --mode basic --steps 20
 ```
 
 episode 默认从时隙 0 开始，最多执行 721 步。每步仅加载所需图快照，返回的
@@ -112,7 +112,7 @@ episode 默认从时隙 0 开始，最多执行 721 步。每步仅加载所需�
 检查未来互斥特征：
 
 ```bash
-python scripts/01_test_env.py --config configs/env.yaml --mode mutex
+python scripts/run/01_test_env.py --config configs/env.yaml --mode mutex
 ```
 
 ## ProactiveRulePolicy
@@ -121,7 +121,7 @@ python scripts/01_test_env.py --config configs/env.yaml --mode mutex
 限制 setup cost；互斥规避收益相同时，默认选择传播与建链总时延更低的动作。
 
 ```bash
-python scripts/03_run_proactive_rule.py --config configs/env.yaml
+python scripts/run/02_run_proactive_rule.py --config configs/env.yaml
 ```
 
 该脚本逐步比较 `future_mutex_keep` 与 `future_mutex_after`。第三阶段的验证目标是

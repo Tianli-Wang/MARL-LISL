@@ -41,7 +41,7 @@ data/traffic/traffic_stress_config.json
 ## 诊断 future mutex 压力
 
 ```bash
-python scripts/06_evaluate_methods.py \
+python scripts/run/05_evaluate_methods.py \
   --env-config configs/env.yaml \
   --traffic data/traffic/traffic_pairs_stress.npy \
   --methods diagnose
@@ -52,7 +52,7 @@ python scripts/06_evaluate_methods.py \
 ## 运行 baseline 对比
 
 ```bash
-python scripts/06_evaluate_methods.py \
+python scripts/run/05_evaluate_methods.py \
   --env-config configs/env.yaml \
   --traffic data/traffic/traffic_pairs_stress.npy \
   --methods baselines \
@@ -68,7 +68,7 @@ outputs/tables/baseline_compare.csv
 ## MAPPO + Baselines 统一对比
 
 ```bash
-python scripts/06_evaluate_methods.py \
+python scripts/run/05_evaluate_methods.py \
   --env-config configs/env.yaml \
   --mappo-config configs/mappo.yaml \
   --checkpoint outputs/runs/<run_name>/checkpoints/latest.pt \

@@ -5,8 +5,8 @@ device: cuda
 # PyTorch 计算线程数；环境进程很多时不要设太大，避免线程过度竞争。
 torch_num_threads: 8
 
-# 多进程环境启动方式；Linux 上 fork 启动快，适合本项目只读 memmap 数据。
-multiprocessing_start_method: fork
+# 多进程环境启动方式；auto 在 Linux 优先 fork，在 Windows 自动使用 spawn。
+multiprocessing_start_method: auto
 # 并行环境数量；512 线程服务器上 64 个 env 能显著降低 rollout 时间。
 num_envs: 20
 # 每个 env 每次 update 采样多少步；总样本数为 num_envs * rollout_length。

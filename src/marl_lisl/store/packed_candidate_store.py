@@ -151,7 +151,7 @@ class PackedCandidateStore:
                 raise ValueError(
                     f"Candidate pack {self.pack_dir} is incomplete: missing "
                     f"{len(missing)} timeslots ({preview}{suffix}). "
-                    "Rerun scripts/preprocess/06_build_candidates.py."
+                    "Rerun scripts/preprocess/05_build_candidates.py."
                 )
         self._k_to_index = {k: i for i, k in enumerate(self.ks)}
         self.nodes = np.load(self.pack_dir / _NODES_NAME, mmap_mode="r")

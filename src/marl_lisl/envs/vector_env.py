@@ -7,6 +7,7 @@ import multiprocessing as mp
 from multiprocessing.connection import Connection
 import traceback
 from typing import Any
+import warnings
 
 import numpy as np
 
@@ -58,13 +59,18 @@ class SubprocVectorEnv:
         num_envs: int,
         start_method: str = "spawn",
     ):
+        # 这些清理字段必须在任何可能失败的配置复制、pack 构建或进程创建之前
+        # 初始化。这样构造函数中途抛错后，Python 调用 __del__ 也不会用二次
+        # AttributeError 覆盖真正的首个异常。
+        self._closed = False
+        self._remotes: list[Connection] = []
+        self._processes: list[mp.Process] = []
         self.env_config = deepcopy(env_config)
         self.num_envs = max(1, int(num_envs))
         self.num_flows = int(env_config["num_flows"])
         self.num_candidates = int(env_config["num_candidates"])
         self.obs_dim = LISLMultiFlowEnv.obs_dim
         self.state_dim = LISLMultiFlowEnv.state_dim
-        self._closed = False
         if (
             str(self.env_config.get("graph_backend", "lazy")).lower() == "packed"
             and bool(self.env_config.get("graph_pack_build_if_missing", True))
@@ -84,20 +90,51 @@ class SubprocVectorEnv:
             build_candidate_pack(self.env_config["candidate_dir"])
             candidates_cfg["pack_build_if_missing"] = False
             self.env_config["candidates"] = candidates_cfg
-        context = mp.get_context(start_method)
-        self._remotes: list[Connection] = []
-        self._processes: list[mp.Process] = []
-        for worker_id in range(self.num_envs):
-            parent_remote, child_remote = context.Pipe()
-            process = context.Process(
-                target=_env_worker,
-                args=(child_remote, self.env_config, worker_id),
-                daemon=True,
+        requested_method = str(start_method).strip().lower()
+        available_methods = tuple(mp.get_all_start_methods())
+        if requested_method in ("", "auto"):
+            # Linux 优先 fork，以较低启动开销共享只读 memmap；Windows 没有
+            # fork，只能选择 spawn。通过运行时能力判断而不是硬编码平台名，
+            # 也能兼容 macOS 和受限 Python 构建。
+            selected_method = "fork" if "fork" in available_methods else "spawn"
+        elif requested_method in available_methods:
+            selected_method = requested_method
+        else:
+            # 旧配置可能在 Windows 上仍写 fork。回退到当前解释器实际支持的
+            # 方法并保留警告，避免因机器迁移直接终止训练。
+            selected_method = (
+                "spawn" if "spawn" in available_methods else available_methods[0]
             )
-            process.start()
-            child_remote.close()
-            self._remotes.append(parent_remote)
-            self._processes.append(process)
+            warnings.warn(
+                f"multiprocessing start method {requested_method!r} is unavailable; "
+                f"falling back to {selected_method!r}. Available: {available_methods}",
+                stacklevel=2,
+            )
+        self.start_method = selected_method
+        print(f"SubprocVectorEnv start method: {self.start_method}")
+        context = mp.get_context(self.start_method)
+        try:
+            for worker_id in range(self.num_envs):
+                parent_remote, child_remote = context.Pipe()
+                process = context.Process(
+                    target=_env_worker,
+                    args=(child_remote, self.env_config, worker_id),
+                    daemon=True,
+                )
+                try:
+                    process.start()
+                except BaseException:
+                    # 当前进程尚未加入成员列表，需要在这里单独关闭本轮 Pipe；
+                    # 已成功启动的早期 worker 则交给统一 close() 回收。
+                    parent_remote.close()
+                    child_remote.close()
+                    raise
+                child_remote.close()
+                self._remotes.append(parent_remote)
+                self._processes.append(process)
+        except BaseException:
+            self.close()
+            raise
 
     @staticmethod
     def _check_message(message: Any) -> Any:
@@ -138,24 +175,31 @@ class SubprocVectorEnv:
         )
 
     def close(self) -> None:
-        if self._closed:
+        if getattr(self, "_closed", True):
             return
         self._closed = True
-        for remote in self._remotes:
+        remotes = list(getattr(self, "_remotes", ()))
+        processes = list(getattr(self, "_processes", ()))
+        for remote in remotes:
             try:
                 remote.send(("close", None))
             except (BrokenPipeError, EOFError, OSError):
                 pass
-        for process in self._processes:
+        for process in processes:
             process.join(timeout=5)
             if process.is_alive():
                 process.terminate()
                 process.join(timeout=1)
-        for remote in self._remotes:
+        for remote in remotes:
             try:
                 remote.close()
             except OSError:
                 pass
 
     def __del__(self):  # pragma: no cover - best-effort cleanup
-        self.close()
+        try:
+            self.close()
+        except BaseException:
+            # 析构函数不能再向外抛异常，否则会产生 "Exception ignored in
+            # __del__" 噪声并掩盖构造或训练阶段真正需要定位的错误。
+            pass

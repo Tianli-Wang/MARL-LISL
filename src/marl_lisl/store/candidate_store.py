@@ -26,7 +26,7 @@ class CandidateStore:
         if not self.candidate_dir.is_dir():
             raise FileNotFoundError(
                 f"Candidate directory not found: {self.candidate_dir}. "
-                "Run scripts/preprocess/06_build_candidates.py first."
+                "Run scripts/preprocess/05_build_candidates.py first."
             )
 
     def get_candidates(self, k: int) -> list[list[list[int]]]:
@@ -42,7 +42,7 @@ class CandidateStore:
         if not path.is_file():
             raise FileNotFoundError(
                 f"Candidate file not found: {path}. "
-                "Run scripts/preprocess/06_build_candidates.py first."
+                "Run scripts/preprocess/05_build_candidates.py first."
             )
         with np.load(path) as data:
             if "nodes" not in data or "offsets" not in data:

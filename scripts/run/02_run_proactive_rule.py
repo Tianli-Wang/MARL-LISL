@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
 from marl_lisl.envs import LISLMultiFlowEnv, ProactiveRulePolicy
@@ -59,9 +59,9 @@ def main() -> None:
     }
     for _ in range(limit):
         step_start = time.perf_counter()
-        # 当前 observation 已保存同一时隙、同一组路径的精确 keep mutex，直接
-        # 复用可以避免规则评估脚本额外发起一次组合互斥查询。
-        keep = env.current_future_mutex
+        # 必须使用 reward 的完整 future_window 计算 keep，不能直接读取采用较短
+        # observation_window 的 state，否则 keep/after 两侧统计口径不同。
+        keep, _keep_info = env.compute_current_future_mutex()
         actions = policy.act(obs, action_mask)
         obs, _state, action_mask, reward, done, info = env.step(actions)
         after = float(info["future_mutex"])

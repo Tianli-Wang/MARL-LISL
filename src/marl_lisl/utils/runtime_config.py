@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import warnings
 from pathlib import Path
 
@@ -113,4 +114,31 @@ def load_runtime_mappo_config(config_path: Path, project_root: Path) -> dict:
     config["output"]["run_root"] = resolve_project_path(
         project_root, config["output"]["run_root"]
     )
+    return config
+
+
+def load_checkpoint_mappo_config(
+    checkpoint_path: Path,
+    fallback_config: dict,
+    *,
+    num_envs: int = 1,
+) -> dict:
+    """优先读取 checkpoint 内保存的 MAPPO 结构，并保留当前运行设置。
+
+    Actor/Critic 的层数、宽度和输入归一化必须与保存权重时一致，因此评估不能
+    盲目使用后来修改过的 ``mappo.yaml``。设备和输出目录属于本次运行设置，
+    仍采用当前 YAML；旧 checkpoint 没有 config 时才整体回退到当前配置。
+    """
+    import torch
+
+    checkpoint_path = Path(checkpoint_path)
+    try:
+        payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    except TypeError:  # 兼容没有 weights_only 参数的旧 PyTorch
+        payload = torch.load(checkpoint_path, map_location="cpu")
+    stored_config = payload.get("config") if isinstance(payload, dict) else None
+    config = deepcopy(stored_config if isinstance(stored_config, dict) else fallback_config)
+    config["device"] = fallback_config.get("device", config.get("device", "cpu"))
+    config["output"] = deepcopy(fallback_config["output"])
+    config["num_envs"] = max(1, int(num_envs))
     return config

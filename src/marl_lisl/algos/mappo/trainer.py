@@ -291,10 +291,13 @@ class MAPPOTrainer:
         print(f"Training finished. Run directory: {self.run_dir}")
 
     @torch.no_grad()
-    def evaluate(self, num_episodes: int = 1) -> dict[str, float]:
+    def evaluate(
+        self, num_episodes: int = 1, max_steps: int | None = None
+    ) -> dict[str, float]:
+        """确定性评估若干 episode，可用 max_steps 执行快速短轨迹验证。"""
         if self.num_envs != 1:
             raise NotImplementedError(
-                "MAPPOTrainer.evaluate expects a single env; use scripts/05_evaluate_mappo.py "
+                "MAPPOTrainer.evaluate expects a single env; use scripts/run/04_evaluate_mappo.py "
                 "for checkpoints trained with vectorized rollout."
             )
         totals: list[dict[str, float]] = []
@@ -308,6 +311,8 @@ class MAPPOTrainer:
             steps = 0
             done = False
             while not done:
+                if max_steps is not None and steps >= max(0, int(max_steps)):
+                    break
                 actions, *_ = self.policy.act(obs, state, mask, deterministic=True)
                 obs, state, mask, reward, done, info = self.env.step(actions)
                 aggregate["total_reward"] += reward
@@ -332,7 +337,10 @@ class MAPPOTrainer:
         }, path)
         return path
 
-    def load_checkpoint(self, path: str | Path) -> dict:
+    def load_checkpoint(
+        self, path: str | Path, *, load_optimizer: bool = True
+    ) -> dict:
+        """恢复模型权重；纯评估可跳过不需要的优化器状态。"""
         path = Path(path)
         if not path.is_file():
             raise FileNotFoundError(f"MAPPO checkpoint not found: {path}")
@@ -342,7 +350,7 @@ class MAPPOTrainer:
             checkpoint = torch.load(path, map_location=self.device)
         self.policy.actor.load_state_dict(checkpoint["actor"])
         self.policy.critic.load_state_dict(checkpoint["critic"])
-        if "optimizer" in checkpoint:
+        if load_optimizer and "optimizer" in checkpoint:
             self.optimizer.load_state_dict(checkpoint["optimizer"])
         self.current_update = int(checkpoint.get("update", 0))
         return checkpoint
