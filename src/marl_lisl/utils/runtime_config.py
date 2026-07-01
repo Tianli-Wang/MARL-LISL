@@ -62,12 +62,9 @@ def load_runtime_env_config(
             candidates_cfg[key] = resolve_project_path(project_root, candidates_cfg[key])
     config["candidates"] = candidates_cfg
 
-    mutex_cfg = dict(config.get("future_mutex", {}))
-    if "node_mutex_path" in mutex_cfg:
-        mutex_cfg["node_mutex_path"] = resolve_project_path(
-            project_root, mutex_cfg["node_mutex_path"]
-        )
-    config["future_mutex"] = mutex_cfg
+    # 路径互斥只依赖路径节点集合，不再读取节点容量文件；仍复制子配置，避免
+    # 入口脚本临时覆盖 future_window 时修改 YAML 加载器返回的共享对象。
+    config["future_mutex"] = dict(config.get("future_mutex", {}))
 
     if traffic_split not in _TRAFFIC_KEYS:
         raise ValueError(f"未知 traffic split: {traffic_split}")

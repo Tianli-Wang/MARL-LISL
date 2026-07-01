@@ -10,7 +10,7 @@ graph_root_dir: data/graphs
 
 # 512 CPU 线程 / 720G 内存机器推荐从 128 起步；若 IO 或内存仍很空，可试 192/256。
 # 0 表示自动选择，当前代码自动上限为 128。
-parallel_workers: 128
+parallel_workers: 20
 
 # STK 数据时隙间隔，单位秒。
 dt: 5.0
@@ -29,7 +29,7 @@ earth_radius_m: 6371000.0
 # 光速，单位 m/s；用于传播时延计算。
 speed_of_light_m_s: 299792458.0
 
-# 默认链路/节点容量；当前主要用于后续互斥容量初始化。
+# 图快照中的默认链路容量特征；当前路径互斥检测不使用该字段。
 default_capacity: 1.0
 
 # 新建链路 setup delay 计算参数。

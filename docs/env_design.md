@@ -3,7 +3,7 @@
 ## 目标与边界
 
 第二阶段提供了能稳定执行 `reset/step` 的多源多宿路由环境。第三阶段在此基础上
-加入短窗口未来节点互斥检测和主动规避规则。每条业务流视为一个 agent，所有
+加入短窗口未来路径互斥检测和主动规避规则。每条业务流视为一个 agent，所有
 agent 共享团队 reward。当前仍不包含 MAPPO、actor/critic 或训练缓冲区。
 
 ## 输入数据与懒加载
@@ -95,24 +95,15 @@ next_obs, next_state, next_action_mask, reward, done, info = env.step(actions)
 python scripts/01_test_env.py --config configs/env.yaml --mode basic --steps 20
 ```
 
-由于默认配置已启用 future mutex，首次创建环境前必须先运行下文的
-`05_build_mutex.py`。
-
 episode 默认从时隙 0 开始，最多执行 721 步。每步仅加载所需图快照，返回的
 `info` 包含时延、切换、新链路、中断和非法动作统计。
 
-## 第三阶段：未来节点互斥
-
-先生成紧凑的一维节点容量数组；它不是 `6080 × 6080` 互斥矩阵：
-
-```bash
-python scripts/preprocess/05_build_mutex.py --config configs/env.yaml
-```
+## 第三阶段：未来路径互斥
 
 `FutureMutexDetector` 从当前时隙向后检查 `future_window` 个时隙。仅当一条路径的
-全部边在未来图中仍存在时，它才占用对应中继节点。节点占用超过
-`node_mutex[node]` 的部分计为冲突，并乘以 `future_discount ** delta`。源宿节点
-默认不计入互斥资源。
+全部边在未来图中仍存在时，才参与路径互斥。任意两条有效路径共享至少一个中继
+卫星就记 1 次冲突，并乘以 `future_discount ** delta`；同一路径对共享多个节点仍
+只计 1 次。当前实现不读取节点或链路容量，源宿节点默认不参与路径求交。
 
 为避免对每个候选动作反复构造巨大 Python 边集合，检测器只缓存活动未来窗口的
 排序整数边键，并用二分查找判断路径边是否存在。这仍是稀疏窗口缓存；图文件始终
@@ -135,5 +126,5 @@ python scripts/03_run_proactive_rule.py --config configs/env.yaml
 
 该脚本逐步比较 `future_mutex_keep` 与 `future_mutex_after`。第三阶段的验证目标是
 观察到 `future_mutex_keep > future_mutex_after` 和 `mutex_avoided > 0`。如果固定
-traffic pairs 没有共享中继节点，零冲突是合法结果，可增加 flow 数、降低节点容量
-或调整 traffic pairs 制造更强的竞争场景。第一版只处理节点互斥，不处理链路互斥。
+traffic pairs 没有共享中继节点，零冲突是合法结果，可增加 flow 数或调整 traffic
+pairs 制造更强的竞争场景。当前只处理共享节点形成的路径互斥，不处理容量约束。

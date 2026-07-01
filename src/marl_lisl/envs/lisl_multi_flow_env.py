@@ -14,7 +14,6 @@ from marl_lisl.envs.path_generator import PathGenerator
 from marl_lisl.envs.reward_calculator import RewardCalculator
 from marl_lisl.store.candidate_store import CandidateStore
 from marl_lisl.store.graph_store import GraphStore
-from marl_lisl.store.mutex_store import MutexStore
 from marl_lisl.store.traffic_store import TrafficStore
 from marl_lisl.utils.graph import edge_path_from_node_path
 
@@ -116,22 +115,15 @@ class LISLMultiFlowEnv:
         self.reward_calculator = RewardCalculator(config["reward_weights"])
         self.conflict_detector = ConflictDetector(self.num_sats)
         self.future_mutex_enabled = bool(mutex_cfg.get("enabled", False))
-        self.mutex_store: MutexStore | None = None
         self.future_mutex_detector: FutureMutexDetector | None = None
         self.future_mutex_observation_detector: FutureMutexDetector | None = None
         if self.future_mutex_enabled:
-            self.mutex_store = MutexStore(Path(mutex_cfg["node_mutex_path"]))
-            node_capacity = self.mutex_store.get_node_capacity()
-            if len(node_capacity) != self.num_sats:
-                raise ValueError(
-                    f"node mutex length {len(node_capacity)} != num_sats {self.num_sats}"
-                )
             future_window = int(mutex_cfg["future_window"])
             observation_window = int(mutex_cfg.get("observation_window", future_window))
             path_cache_size = int(mutex_cfg.get("path_cache_size", 200_000))
             self.future_mutex_detector = FutureMutexDetector(
                 self.graph_store,
-                node_capacity,
+                self.num_sats,
                 future_window,
                 float(mutex_cfg.get("future_discount", 0.95)),
                 bool(mutex_cfg.get("include_source_dest_nodes", False)),
@@ -142,7 +134,7 @@ class LISLMultiFlowEnv:
             else:
                 self.future_mutex_observation_detector = FutureMutexDetector(
                     self.graph_store,
-                    node_capacity,
+                    self.num_sats,
                     observation_window,
                     float(mutex_cfg.get("future_discount", 0.95)),
                     bool(mutex_cfg.get("include_source_dest_nodes", False)),

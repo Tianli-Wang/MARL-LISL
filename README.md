@@ -1,7 +1,7 @@
 # MARL-LISL
 
 面向低轨巨星座星间激光通信（LISL）的多业务流协同路由项目。项目包含 STK
-轨迹预处理、动态稀疏图构建、离线候选路径、未来节点互斥检测、规则 baseline
+轨迹预处理、动态稀疏图构建、离线候选路径、未来路径互斥检测、规则 baseline
 和 MAPPO 训练评估闭环。
 
 ## 目录
@@ -15,7 +15,7 @@ src/        可复用的核心实现
 ```
 
 入口脚本只负责解析参数和调用 `src/marl_lisl/` 中的实现。运行脚本共享
-`src/marl_lisl/utils/runtime_config.py`，统一解析 graph、traffic、candidate 和 mutex
+`src/marl_lisl/utils/runtime_config.py`，统一解析 graph、traffic 和 candidate
 路径，避免训练、测试、评估使用不同的数据集合。
 
 ## 安装
@@ -46,7 +46,6 @@ pip install -r requirements.txt
 | `scripts/preprocess/02_build_graph_snapshots.py` | 构建逐时隙 LISL 稀疏图，并反向计算链路剩余寿命 |
 | `scripts/preprocess/03_check_processed_data.py` | 检查状态数组和抽样图快照的形状、数值及边结构 |
 | `scripts/preprocess/04_build_traffic.py` | 统一生成普通 train/eval traffic 和 future-mutex stress traffic |
-| `scripts/preprocess/05_build_mutex.py` | 生成每颗卫星的节点中继容量数组 |
 | `scripts/preprocess/06_build_candidates.py` | 离线计算 train/eval/stress 每个时隙、每条 flow 的候选路径 |
 | `scripts/preprocess/08_pack_data.py` | 统一把图快照和候选路径打包成多进程可共享的 memmap 查找表 |
 
@@ -68,17 +67,14 @@ python scripts/preprocess/03_check_processed_data.py --config configs/preprocess
 # 4. 生成 train/eval 和 stress 三套业务流
 python scripts/preprocess/04_build_traffic.py --config configs/env.yaml --split all --workers 2
 
-# 5. 生成节点互斥容量
-python scripts/preprocess/05_build_mutex.py --config configs/env.yaml
-
-# 6. 先把图打包为共享 memmap，供并行候选路径预处理读取
+# 5. 先把图打包为共享 memmap，供并行候选路径预处理读取
 python scripts/preprocess/08_pack_data.py --config configs/env.yaml --target graphs
 
-# 7. 离线生成三套候选路径；packed 后端下生成完成后会自动打包
+# 6. 离线生成三套候选路径；packed 后端下生成完成后会自动打包
 python scripts/preprocess/06_build_candidates.py \
   --config configs/env.yaml --split all --workers 128
 
-# 8. 如需单独重建或校验全部 pack
+# 7. 如需单独重建或校验全部 pack
 python scripts/preprocess/08_pack_data.py \
   --config configs/env.yaml --target all --split all --force
 ```
@@ -92,7 +88,6 @@ python scripts/preprocess/08_pack_data.py \
 data/sat_state/                         卫星状态、有效掩码和时间索引
 data/graphs/dmax_2000km/                逐时隙图及 _packed 图查找表
 data/traffic/                           train/eval/stress traffic pairs
-data/mutex/node_mutex.npy               节点中继容量
 data/candidates/{train,eval,stress}/    离线候选路径及 _packed 查找表
 ```
 
@@ -122,8 +117,9 @@ python scripts/01_test_env.py --config configs/env.yaml --mode mutex --split str
 [T_prop, T_setup, R_min, N_new, hop_count, feasible, A_mutex, B_avoid]
 ```
 
-其中 `A_mutex` 是执行该动作后的未来节点冲突量，`B_avoid` 是相对保持动作减少的
-冲突量。默认只统计路径中继节点，不统计源宿卫星。
+其中 `A_mutex` 是执行该动作后的未来路径对冲突量，`B_avoid` 是相对保持动作减少的
+冲突量。任意两条有效路径共享至少一个中继卫星即记 1 次互斥；同一路径对共享
+多个节点仍只计 1 次。该定义不读取节点或链路容量，默认也不统计源宿卫星。
 
 ## 主动规则 baseline
 
@@ -188,7 +184,7 @@ python scripts/06_evaluate_methods.py \
 
 - `graph_backend: packed`：图快照通过共享 memmap 读取，避免多进程重复解压 NPZ。
 - `candidates.backend: packed`：候选路径离线计算，环境不再逐时隙运行最短路搜索。
-- future mutex 会缓存路径边编码和中继节点，降低候选动作之间的重复检查。
+- future mutex 会缓存路径边编码和中继节点集合，降低路径对求交的重复开销。
 - GPU 只负责 MAPPO Actor/Critic 的前向、反向与 PPO 更新；环境 step、预处理和
   future mutex 仍是 CPU 任务。
 - 多环境训练时建议把 `OMP_NUM_THREADS`、`MKL_NUM_THREADS`、

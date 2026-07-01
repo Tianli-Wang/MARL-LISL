@@ -1,8 +1,8 @@
-"""Discounted future relay-node mutex detection over a short graph window."""
+"""在短未来窗口内检测共享中继卫星的路径对互斥。"""
 
 from __future__ import annotations
 
-from collections import Counter, OrderedDict
+from collections import OrderedDict
 
 import numpy as np
 
@@ -10,36 +10,44 @@ from marl_lisl.utils.graph import encode_path_edges
 
 
 class FutureMutexDetector:
+    """计算有效路径两两共享中继节点产生的折扣冲突量。
+
+    当前定义不涉及节点或链路容量：同一时隙内，任意两条完整有效路径只要
+    共享至少一个被统计的卫星节点，就记 1 次路径互斥。同一对路径即使共享
+    多个节点也仍只计 1 次，但这些共享节点都会记录到诊断信息中。
+    """
+
     def __init__(
         self,
         graph_store,
-        node_capacity: np.ndarray,
+        num_sats: int,
         future_window: int,
         future_discount: float = 0.95,
         include_source_dest_nodes: bool = False,
         path_cache_size: int = 200_000,
     ):
         self.graph_store = graph_store
-        self.node_capacity = np.asarray(node_capacity, dtype=np.int32)
-        if self.node_capacity.ndim != 1 or np.any(self.node_capacity < 1):
-            raise ValueError("node_capacity must be a positive one-dimensional array")
-        self.num_sats = len(self.node_capacity)
+        self.num_sats = int(num_sats)
+        if self.num_sats <= 0:
+            raise ValueError("num_sats must be positive")
         self.future_window = max(0, int(future_window))
         self.future_discount = float(future_discount)
         if not 0.0 <= self.future_discount <= 1.0:
             raise ValueError("future_discount must be in [0, 1]")
         self.include_source_dest_nodes = bool(include_source_dest_nodes)
-        # Only encoded sparse edge keys for the active future window are retained.
+
+        # 图边键只保留当前未来窗口，避免一次加载全部时隙；路径缓存则跨时隙
+        # 保存边编码和节点集合，让大量候选动作共享同一份不可变路径画像。
         self._edge_key_cache: OrderedDict[int, np.ndarray] = OrderedDict()
-        self._cache_size = self.future_window + 1
+        self._edge_cache_size = self.future_window + 1
         self._path_cache_size = max(0, int(path_cache_size))
         self._path_cache: OrderedDict[
             tuple[int, ...] | None,
-            tuple[np.ndarray, tuple[int, ...], Counter[int]],
+            tuple[np.ndarray, tuple[int, ...], frozenset[int]],
         ] = OrderedDict()
-        self._empty_counter: Counter[int] = Counter()
 
     def _edge_keys(self, k: int) -> np.ndarray:
+        """读取一个图快照并返回可二分查找的无向边整数编码。"""
         if k in self._edge_key_cache:
             self._edge_key_cache.move_to_end(k)
             return self._edge_key_cache[k]
@@ -51,32 +59,36 @@ class FutureMutexDetector:
         if len(keys) > 1 and np.any(keys[1:] < keys[:-1]):
             keys = np.sort(keys)
         self._edge_key_cache[k] = keys
-        while len(self._edge_key_cache) > self._cache_size:
+        while len(self._edge_key_cache) > self._edge_cache_size:
             self._edge_key_cache.popitem(last=False)
         return keys
 
-    def _path_available(self, path: list[int] | None, edge_keys: np.ndarray) -> bool:
-        return self._encoded_path_available(self._encoded_path_edges(path), edge_keys)
-
-    def _path_key(self, path: list[int] | tuple[int, ...] | None) -> tuple[int, ...] | None:
+    @staticmethod
+    def _path_key(
+        path: list[int] | tuple[int, ...] | None,
+    ) -> tuple[int, ...] | None:
+        """把路径转换成稳定缓存键；不足一条边的对象统一视为无效路径。"""
         if path is None or len(path) < 2:
             return None
         return tuple(int(node) for node in path)
 
     def _path_info(
         self, path: list[int] | tuple[int, ...] | None
-    ) -> tuple[np.ndarray, tuple[int, ...], Counter[int]]:
+    ) -> tuple[np.ndarray, tuple[int, ...], frozenset[int]]:
+        """返回路径边编码、中继节点序列和用于求交集的节点集合。"""
         key = self._path_key(path)
         if key in self._path_cache:
             self._path_cache.move_to_end(key)
             return self._path_cache[key]
         if key is None:
-            info = (np.empty(0, dtype=np.int64), (), self._empty_counter)
+            info = (np.empty(0, dtype=np.int64), (), frozenset())
         else:
             encoded = encode_path_edges(key, self.num_sats)
             nodes = key if self.include_source_dest_nodes else key[1:-1]
-            occupied = tuple(node for node in nodes if 0 <= int(node) < self.num_sats)
-            info = (encoded, occupied, Counter(occupied))
+            occupied = tuple(
+                int(node) for node in nodes if 0 <= int(node) < self.num_sats
+            )
+            info = (encoded, occupied, frozenset(occupied))
         if self._path_cache_size:
             self._path_cache[key] = info
             self._path_cache.move_to_end(key)
@@ -84,29 +96,50 @@ class FutureMutexDetector:
                 self._path_cache.popitem(last=False)
         return info
 
-    def _encoded_path_edges(self, path: list[int] | None) -> np.ndarray:
-        """Encode a node path into sparse integer edge keys once for reuse."""
-        return self._path_info(path)[0]
-
-    def _encoded_path_available(self, encoded: np.ndarray, edge_keys: np.ndarray) -> bool:
-        """Check whether all encoded path edges exist in one graph snapshot."""
+    def _encoded_path_available(
+        self, encoded: np.ndarray, edge_keys: np.ndarray
+    ) -> bool:
+        """判断路径的全部边是否同时存在于指定时隙。"""
         if not len(encoded):
             return False
         indices = np.searchsorted(edge_keys, encoded)
-        return bool(np.all(indices < len(edge_keys)) and np.all(edge_keys[indices] == encoded))
+        return bool(
+            np.all(indices < len(edge_keys))
+            and np.all(edge_keys[indices] == encoded)
+        )
 
-    def _occupied_nodes(self, path: list[int]) -> list[int]:
-        return list(self._path_info(path)[1])
+    def _path_available(self, path: list[int] | None, edge_keys: np.ndarray) -> bool:
+        """兼容单路径诊断调用，内部复用已经缓存的边编码。"""
+        return self._encoded_path_available(self._path_info(path)[0], edge_keys)
+
+    @staticmethod
+    def _pair_conflicts(
+        node_sets: list[frozenset[int]],
+    ) -> tuple[int, set[int]]:
+        """统计路径集合中的冲突路径对，并返回所有导致冲突的共享节点。
+
+        这里按路径对计数而不是按共享节点数计数。例如两条路径同时共享节点
+        10 和 11，结果仍为 1 次路径互斥，诊断节点集合则包含 ``{10, 11}``。
+        """
+        conflict_count = 0
+        conflict_nodes: set[int] = set()
+        for left in range(len(node_sets)):
+            for right in range(left + 1, len(node_sets)):
+                shared = node_sets[left].intersection(node_sets[right])
+                if shared:
+                    conflict_count += 1
+                    conflict_nodes.update(shared)
+        return conflict_count, conflict_nodes
 
     def compute_future_mutex(self, paths: list, k: int) -> tuple[float, dict]:
+        """计算一组路径在未来窗口中的折扣路径对互斥。"""
         mutex_count = 0.0
         raw_conflict_count = 0
         invalid_future_path_count = 0
         first_conflict_slot: int | None = None
         first_conflict_nodes: list[int] = []
         evaluated_slots = 0
-        encoded_paths = [self._encoded_path_edges(path) for path in paths]
-        occupied_nodes = [self._path_info(path)[1] for path in paths]
+        path_infos = [self._path_info(path) for path in paths]
 
         for delta in range(self.future_window + 1):
             slot = int(k) + delta
@@ -117,20 +150,14 @@ class FutureMutexDetector:
                     raise
                 break
             evaluated_slots += 1
-            occupancy: Counter[int] = Counter()
-            for encoded, nodes in zip(encoded_paths, occupied_nodes):
-                if not self._encoded_path_available(encoded, edge_keys):
+            valid_node_sets: list[frozenset[int]] = []
+            for encoded, _nodes, node_set in path_infos:
+                if self._encoded_path_available(encoded, edge_keys):
+                    valid_node_sets.append(node_set)
+                else:
                     invalid_future_path_count += 1
-                    continue
-                occupancy.update(nodes)
 
-            conflict_nodes: list[int] = []
-            slot_conflicts = 0
-            for node, count in occupancy.items():
-                excess = count - int(self.node_capacity[node])
-                if excess > 0:
-                    slot_conflicts += excess
-                    conflict_nodes.append(node)
+            slot_conflicts, conflict_nodes = self._pair_conflicts(valid_node_sets)
             if slot_conflicts:
                 raw_conflict_count += slot_conflicts
                 mutex_count += (self.future_discount ** delta) * slot_conflicts
@@ -154,32 +181,20 @@ class FutureMutexDetector:
         candidate_paths_by_flow: list[list[list[int] | None]],
         k: int,
     ) -> tuple[float, np.ndarray]:
-        """Compute keep mutex and all single-flow replacement mutex values.
+        """一次扫描未来窗口，计算保持动作和所有单 flow 替换动作。
 
-        This is the hot path for observations. It scans each future slot once,
-        builds the current path occupancy once, then updates only nodes touched
-        by a candidate replacement instead of copying a Counter for every action.
+        对每个候选只重新计算“候选路径与其他有效路径”的交集；其他 flow
+        之间的路径对冲突直接复用，因此不会为每个动作复制完整路径集合。
         """
         flow_count = len(paths)
         max_candidates = max(
-            (len(candidates) for candidates in candidate_paths_by_flow),
-            default=0,
+            (len(candidates) for candidates in candidate_paths_by_flow), default=0
         )
         candidate_mutexes = np.zeros((flow_count, max_candidates), dtype=np.float64)
         keep_mutex = 0.0
-
-        current_encoded = [self._encoded_path_edges(path) for path in paths]
         current_infos = [self._path_info(path) for path in paths]
-        current_nodes = [info[1] for info in current_infos]
-        current_node_counts = [info[2] for info in current_infos]
-        candidate_encoded = [
-            [self._encoded_path_edges(path) for path in candidates]
-            for candidates in candidate_paths_by_flow
-        ]
-        candidate_node_counts = [
-            [
-                self._path_info(path)[2] for path in candidates
-            ]
+        candidate_infos = [
+            [self._path_info(path) for path in candidates]
             for candidates in candidate_paths_by_flow
         ]
 
@@ -191,52 +206,36 @@ class FutureMutexDetector:
                 if delta == 0:
                     raise
                 break
-
             discount = self.future_discount ** delta
-            base_occupancy: Counter[int] = Counter()
-            current_valid = np.zeros(flow_count, dtype=bool)
-            for flow_id, (encoded, nodes) in enumerate(
-                zip(current_encoded, current_nodes)
-            ):
-                if self._encoded_path_available(encoded, edge_keys):
-                    current_valid[flow_id] = True
-                    base_occupancy.update(nodes)
-
-            base_conflicts = 0
-            for node, count in base_occupancy.items():
-                base_conflicts += max(0, count - int(self.node_capacity[node]))
-            keep_mutex += discount * base_conflicts
-
-            for flow_id in range(flow_count):
-                old_counts = (
-                    current_node_counts[flow_id]
-                    if current_valid[flow_id]
-                    else Counter()
+            current_sets: list[frozenset[int] | None] = []
+            for encoded, _nodes, node_set in current_infos:
+                current_sets.append(
+                    node_set
+                    if self._encoded_path_available(encoded, edge_keys)
+                    else None
                 )
-                for candidate_id, encoded in enumerate(candidate_encoded[flow_id]):
-                    candidate_valid = self._encoded_path_available(encoded, edge_keys)
-                    new_counts = (
-                        candidate_node_counts[flow_id][candidate_id]
-                        if candidate_valid
-                        else Counter()
-                    )
-                    touched_nodes = set(old_counts) | set(new_counts)
-                    slot_conflicts = base_conflicts
-                    for node in touched_nodes:
-                        before = int(base_occupancy.get(node, 0))
-                        after = (
-                            before
-                            - int(old_counts.get(node, 0))
-                            + int(new_counts.get(node, 0))
-                        )
-                        capacity = int(self.node_capacity[node])
-                        slot_conflicts += max(0, after - capacity) - max(
-                            0, before - capacity
+            keep_conflicts, _ = self._pair_conflicts(
+                [node_set for node_set in current_sets if node_set is not None]
+            )
+            keep_mutex += discount * keep_conflicts
+
+            for flow_id, candidates in enumerate(candidate_infos):
+                other_sets = [
+                    node_set
+                    for index, node_set in enumerate(current_sets)
+                    if index != flow_id and node_set is not None
+                ]
+                other_conflicts, _ = self._pair_conflicts(other_sets)
+                for candidate_id, (encoded, _nodes, candidate_set) in enumerate(candidates):
+                    slot_conflicts = other_conflicts
+                    if self._encoded_path_available(encoded, edge_keys):
+                        slot_conflicts += sum(
+                            bool(candidate_set.intersection(other_set))
+                            for other_set in other_sets
                         )
                     candidate_mutexes[flow_id, candidate_id] += (
                         discount * slot_conflicts
                     )
-
         return float(keep_mutex), candidate_mutexes
 
     def compute_candidate_mutex(
@@ -246,6 +245,7 @@ class FutureMutexDetector:
         candidate_path: list[int] | None,
         k: int,
     ) -> tuple[float, dict]:
+        """计算只替换一个 flow 后的完整路径互斥信息。"""
         new_paths = list(paths)
         new_paths[int(flow_id)] = candidate_path
         return self.compute_future_mutex(new_paths, k)
@@ -257,7 +257,7 @@ class FutureMutexDetector:
         candidate_paths: list[list[int] | None],
         k: int,
     ) -> list[tuple[float, dict]]:
-        """Compute future mutex for many replacement paths with shared slot work."""
+        """共享基础路径工作量，批量计算一个 flow 的全部候选互斥信息。"""
         flow_id = int(flow_id)
         candidate_count = len(candidate_paths)
         mutex_counts = np.zeros(candidate_count, dtype=np.float64)
@@ -266,19 +266,12 @@ class FutureMutexDetector:
         first_slots: list[int | None] = [None] * candidate_count
         first_nodes: list[list[int]] = [[] for _ in range(candidate_count)]
         evaluated_slots = 0
-
-        base_encoded: list[np.ndarray] = []
-        base_nodes: list[list[int]] = []
-        for index, path in enumerate(paths):
-            if index == flow_id:
-                continue
-            base_encoded.append(self._encoded_path_edges(path))
-            base_nodes.append(self._occupied_nodes(path) if path is not None else [])
-        candidate_encoded = [self._encoded_path_edges(path) for path in candidate_paths]
-        candidate_nodes = [
-            self._occupied_nodes(path) if path is not None else []
-            for path in candidate_paths
+        base_infos = [
+            self._path_info(path)
+            for index, path in enumerate(paths)
+            if index != flow_id
         ]
+        candidate_infos = [self._path_info(path) for path in candidate_paths]
 
         for delta in range(self.future_window + 1):
             slot = int(k) + delta
@@ -289,36 +282,31 @@ class FutureMutexDetector:
                     raise
                 break
             evaluated_slots += 1
-
-            base_occupancy: Counter[int] = Counter()
+            base_sets: list[frozenset[int]] = []
             base_invalid = 0
-            for encoded, nodes in zip(base_encoded, base_nodes):
-                if not self._encoded_path_available(encoded, edge_keys):
-                    base_invalid += 1
-                    continue
-                base_occupancy.update(nodes)
-
-            for candidate_id, (encoded, nodes) in enumerate(
-                zip(candidate_encoded, candidate_nodes)
-            ):
-                occupancy = base_occupancy.copy()
-                invalid = base_invalid
+            for encoded, _nodes, node_set in base_infos:
                 if self._encoded_path_available(encoded, edge_keys):
-                    occupancy.update(nodes)
+                    base_sets.append(node_set)
                 else:
-                    invalid += 1
-                invalid_counts[candidate_id] += invalid
+                    base_invalid += 1
+            base_conflicts, base_conflict_nodes = self._pair_conflicts(base_sets)
 
-                conflict_nodes: list[int] = []
-                slot_conflicts = 0
-                for node, count in occupancy.items():
-                    excess = count - int(self.node_capacity[node])
-                    if excess > 0:
-                        slot_conflicts += excess
-                        conflict_nodes.append(node)
+            for candidate_id, (encoded, _nodes, candidate_set) in enumerate(candidate_infos):
+                candidate_valid = self._encoded_path_available(encoded, edge_keys)
+                invalid_counts[candidate_id] += base_invalid + int(not candidate_valid)
+                slot_conflicts = base_conflicts
+                conflict_nodes = set(base_conflict_nodes)
+                if candidate_valid:
+                    for other_set in base_sets:
+                        shared = candidate_set.intersection(other_set)
+                        if shared:
+                            slot_conflicts += 1
+                            conflict_nodes.update(shared)
                 if slot_conflicts:
                     raw_conflict_counts[candidate_id] += slot_conflicts
-                    mutex_counts[candidate_id] += (self.future_discount ** delta) * slot_conflicts
+                    mutex_counts[candidate_id] += (
+                        self.future_discount ** delta
+                    ) * slot_conflicts
                     if first_slots[candidate_id] is None:
                         first_slots[candidate_id] = slot
                         first_nodes[candidate_id] = sorted(conflict_nodes)
@@ -326,15 +314,17 @@ class FutureMutexDetector:
         results: list[tuple[float, dict]] = []
         for candidate_id in range(candidate_count):
             value = float(mutex_counts[candidate_id])
-            results.append((
-                value,
-                {
-                    "future_mutex": value,
-                    "raw_conflict_count": int(raw_conflict_counts[candidate_id]),
-                    "invalid_future_path_count": int(invalid_counts[candidate_id]),
-                    "first_conflict_slot": first_slots[candidate_id],
-                    "first_conflict_nodes": first_nodes[candidate_id],
-                    "evaluated_slots": evaluated_slots,
-                },
-            ))
+            results.append(
+                (
+                    value,
+                    {
+                        "future_mutex": value,
+                        "raw_conflict_count": int(raw_conflict_counts[candidate_id]),
+                        "invalid_future_path_count": int(invalid_counts[candidate_id]),
+                        "first_conflict_slot": first_slots[candidate_id],
+                        "first_conflict_nodes": first_nodes[candidate_id],
+                        "evaluated_slots": evaluated_slots,
+                    },
+                )
+            )
         return results
