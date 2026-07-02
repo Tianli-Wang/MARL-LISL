@@ -3,11 +3,13 @@
 from .greedy_conflict_aware import GreedyConflictAwarePolicy
 from .maintain_until_conflict import MaintainUntilConflictPolicy
 from .proactive_rule_baseline import ProactiveRuleBaseline
+from .rsmr import RSMRPolicy
 from .shortest_delay import ShortestDelayPolicy
 
 __all__ = [
     "GreedyConflictAwarePolicy",
     "MaintainUntilConflictPolicy",
     "ProactiveRuleBaseline",
+    "RSMRPolicy",
     "ShortestDelayPolicy",
 ]

@@ -15,7 +15,7 @@ from marl_lisl.envs.reward_calculator import RewardCalculator
 from marl_lisl.store.candidate_store import CandidateStore
 from marl_lisl.store.graph_store import GraphStore
 from marl_lisl.store.traffic_store import TrafficStore
-from marl_lisl.utils.graph import edge_path_from_node_path
+from marl_lisl.utils.graph import edge_ids_for_node_path, edge_path_from_node_path
 
 
 class LISLMultiFlowEnv:
@@ -277,6 +277,20 @@ class LISLMultiFlowEnv:
         self._prepared_cache = (graph, obs, state, mask)
         self._prepared_k = self.k
         return self._prepared_cache
+
+    def get_routing_context(self) -> tuple[dict, list, list]:
+        """向需要路径级信息的规则 baseline 暴露当前只读路由上下文。
+
+        普通学习策略只消费 observation；RSMR 还必须判断不同业务流的中继节点
+        是否相交，因此需要真实节点路径。这里返回当前图、当前路径和候选路径，
+        调用方只允许读取，不应原地修改这些环境内部对象。
+        """
+        graph, _obs, _state, _mask = self._prepare_current()
+        return graph, self.current_paths, self._candidate_paths
+
+    def edge_ids_for_path(self, graph: dict, path: list[int]) -> np.ndarray | None:
+        """把节点路径映射为图中的边编号，供规则 baseline 复用统一图编码。"""
+        return edge_ids_for_node_path(graph, path, self.num_sats)
 
     def reset(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         if self.train_random_start and self._max_start > self.episode_start:

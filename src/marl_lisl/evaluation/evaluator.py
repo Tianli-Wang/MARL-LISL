@@ -12,6 +12,11 @@ class Evaluator:
         self.env = env
         self.policy = policy
         self.max_steps = None if max_steps is None else max(0, int(max_steps))
+        # 大多数策略只需要 act 的数组输入；路径级规则策略可选择实现 bind_env，
+        # 由评估器在 episode 开始前注入同一个环境实例。
+        bind_env = getattr(policy, "bind_env", None)
+        if callable(bind_env):
+            bind_env(env)
 
     def run_episode(self) -> dict:
         """Execute one episode and return accumulated metrics."""

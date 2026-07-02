@@ -8,6 +8,7 @@ from marl_lisl.baselines import (
     GreedyConflictAwarePolicy,
     MaintainUntilConflictPolicy,
     ProactiveRuleBaseline,
+    RSMRPolicy,
     ShortestDelayPolicy,
 )
 from marl_lisl.utils.runtime_config import load_runtime_env_config
@@ -32,6 +33,7 @@ def load_env_config_for_traffic(
 def baseline_policies(config: dict) -> list[tuple[str, object]]:
     """Create all baseline policies."""
     return [
+        ("RSMR", RSMRPolicy.from_config(config)),
         ("ShortestDelay", ShortestDelayPolicy()),
         ("MaintainUntilConflict", MaintainUntilConflictPolicy()),
         ("GreedyConflictAware", GreedyConflictAwarePolicy()),

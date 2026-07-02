@@ -1,0 +1,192 @@
+{
+  "main": {
+    "id": "e04fa121447ce25e",
+    "type": "split",
+    "children": [
+      {
+        "id": "4e68650e63253a00",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "1d68b2c84293aa3a",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "docs/MAPPO 的低轨巨星座星间激光通信时空耦合多源多宿协同路由方法.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "MAPPO 的低轨巨星座星间激光通信时空耦合多源多宿协同路由方法"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "2c93a4ce03cacff0",
+    "type": "split",
+    "children": [
+      {
+        "id": "f801e50934f6fa2a",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "305f416ee6278b60",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "文件列表"
+            }
+          },
+          {
+            "id": "0a8c95a8a4f14ed8",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "搜索"
+            }
+          },
+          {
+            "id": "9c2a8f9dc78cdfd2",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "书签"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "right": {
+    "id": "07532a0fa1ab9e4a",
+    "type": "split",
+    "children": [
+      {
+        "id": "954a74d3cf5ec22a",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "412160d3696ff6cd",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "docs/MAPPO 的低轨巨星座星间激光通信时空耦合多源多宿协同路由方法.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "MAPPO 的低轨巨星座星间激光通信时空耦合多源多宿协同路由方法 的反向链接列表"
+            }
+          },
+          {
+            "id": "8cab957c562e7525",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "docs/MAPPO 的低轨巨星座星间激光通信时空耦合多源多宿协同路由方法.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "MAPPO 的低轨巨星座星间激光通信时空耦合多源多宿协同路由方法 的出链列表"
+            }
+          },
+          {
+            "id": "a46df7cf55d9122b",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "标签"
+            }
+          },
+          {
+            "id": "0084c26e1a23f7a8",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "添加笔记属性"
+            }
+          },
+          {
+            "id": "1a95116e08c6b423",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "docs/MAPPO 的低轨巨星座星间激光通信时空耦合多源多宿协同路由方法.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "MAPPO 的低轨巨星座星间激光通信时空耦合多源多宿协同路由方法 的大纲"
+            }
+          }
+        ],
+        "currentTab": 4
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:打开快速切换": false,
+      "graph:查看关系图谱": false,
+      "canvas:新建白板": false,
+      "daily-notes:打开/创建今天的日记": false,
+      "templates:插入模板": false,
+      "command-palette:打开命令面板": false,
+      "bases:新建数据库": false
+    }
+  },
+  "active": "1d68b2c84293aa3a",
+  "lastOpenFiles": [
+    "src/marl_lisl/baselines/__pycache__/rsmr.cpython-314.pyc",
+    "src/marl_lisl/baselines/rsmr.py"
+  ]
+}

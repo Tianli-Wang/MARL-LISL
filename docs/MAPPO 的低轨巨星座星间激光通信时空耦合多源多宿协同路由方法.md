@@ -309,6 +309,224 @@ $$
 这个子问题就是你这篇文章最有辨识度的创新点。
 
 ---
+# Baseline
+
+## 1. Common Node-Masked Routing Formulation
+
+在多源多宿 LISL 路由维护问题中，所有基线方法均采用逐流节点遮罩机制，以保证不同业务流之间不会同时占用相同中继节点。设时隙 $k$ 的动态 LISL 拓扑为
+
+$$ \mathcal{G}^{(k)}=(\mathcal{V},\mathcal{E}^{(k)}), $$
+
+业务流集合为
+
+$$ \mathcal{F}={1,2,\dots,F}, $$
+
+其中第 $f$ 条业务流表示为
+
+$$ f=(s_f,d_f,b_f), $$
+
+$s_f$ 和 $d_f$ 分别为源卫星和宿卫星，$b_f$ 为业务需求。第 $f$ 条流在时隙 $k$ 的路由路径记为
+
+$$ \pi_f^{(k)} = [s_f,v_1,\dots,v_m,d_f]. $$
+
+为了避免不同业务流共享中继节点，定义路径的中继节点集合为
+
+$$ \mathcal{R}(\pi_f^{(k)}) = \pi_f^{(k)}\setminus{s_f,d_f}. $$
+
+在逐流建路过程中，假设第 $f$ 条流之前的业务流已经确定了路径
+
+$$ \pi_1^{(k)},\pi_2^{(k)},\dots,\pi_{f-1}^{(k)}, $$
+
+则已被占用的中继节点集合为
+
+$$ \mathcal{V}_{\mathrm{occ}}^{(k)}(f) = \bigcup_{g=1}^{f-1} \mathcal{R}(\pi_g^{(k)}). $$
+
+第 $f$ 条流只能在去除已占用节点后的可用节点集合中寻找路径：
+
+$$ \mathcal{V}_{\mathrm{avail}}^{(k)}(f) = \mathcal{V} \setminus \mathcal{V}_{\mathrm{occ}}^{(k)}(f). $$
+
+因此，第 $f$ 条流的路径必须满足节点遮罩约束：
+
+$$ \mathcal{R}(\pi_f^{(k)}) \cap \mathcal{V}_{\mathrm{occ}}^{(k)}(f) = \emptyset. $$
+
+由此可以保证任意两条不同业务流的中继节点不重叠：
+
+$$ \mathcal{R}(\pi_f^{(k)}) \cap \mathcal{R}(\pi_g^{(k)}) = \emptyset, \qquad f\neq g. $$
+
+对任意链路 $e\in\mathcal{E}^{(k)}$，定义其综合边权为
+
+$$ c_e^{(k)} = \alpha_{\mathrm{p}}\tau_{\mathrm{prop},e}^{(k)} + \alpha_{\mathrm{s}}\tau_{\mathrm{setup},e}^{(k)} + \alpha_{\mathrm{r}}\frac{1}{r_e^{(k)}+\epsilon}, $$
+
+其中 $\tau_{\mathrm{prop},e}^{(k)}$ 为传播时延，$\tau_{\mathrm{setup},e}^{(k)}$ 为 PAT 建链代价，$r_e^{(k)}$ 为链路剩余寿命，$\epsilon$ 为防止除零的小常数。给定已占用节点集合 $\mathcal{V}_{\mathrm{occ}}^{(k)}(f)$，第 $f$ 条流的节点遮罩最短路径可以写为
+
+$$ \mathcal{P}_{\mathrm{mask}}^{(k)} (s_f,d_f|\mathcal{V}_{\mathrm{occ}}^{(k)}(f)) = \arg\min_{\pi:s_f\rightarrow d_f} \sum_{e\in\pi}c_e^{(k)} $$
+
+subject to
+
+$$ e\in\mathcal{E}^{(k)},\quad \forall e\in\pi, $$
+
+$$ \mathcal{R}(\pi) \cap \mathcal{V}_{\mathrm{occ}}^{(k)}(f) = \emptyset. $$
+
+后续三个 baseline 均基于该节点遮罩路由算子构建，区别仅在于重路由触发机制和主动切换判断规则。
+
+---
+
+## 2. Reactive Sequential Masked Routing, RSMR
+
+RSMR，即 **Reactive Sequential Masked Routing**，中文可称为**反应式逐流节点遮罩路由**。该方法作为最基础的被动基线，遵循"能保持就保持，不能保持才重路由"的原则。具体而言，在每个时隙 $k$，RSMR 按固定业务流顺序逐条检查当前路径是否仍然可用。如果某条流的当前路径在当前拓扑中仍然连通，并且不与前面已经确定路径的中继节点发生冲突，则该流继续保持原路径；否则，才在当前节点遮罩条件下重新寻找一条可行路径。
+
+对于第 $f$ 条流，若其上一时隙路径为 $\pi_f^{(k-1)}$，则 RSMR 首先判断该路径在当前时隙是否仍然可保持。路径保持条件可以写为
+
+$$ \mathcal{E}(\pi_f^{(k-1)}) \subseteq \mathcal{E}^{(k)} $$
+
+and
+
+$$ \mathcal{R}(\pi_f^{(k-1)}) \cap \mathcal{V}_{\mathrm{occ}}^{(k)}(f) = \emptyset. $$
+
+其中，$\mathcal{E}(\pi_f^{(k-1)})$ 表示路径 $\pi_f^{(k-1)}$ 上包含的链路集合。若上述条件成立，则 RSMR 保持原路径：
+
+$$ \pi_f^{(k)} = \pi_f^{(k-1)}. $$
+
+若上述条件不成立，说明该路径已经断链、不可达，或者违反当前节点遮罩约束，则 RSMR 执行节点遮罩重路由：
+
+$$ \pi_f^{(k)} = \mathcal{P}_{\mathrm{mask}}^{(k)} (s_f,d_f|\mathcal{V}_{\mathrm{occ}}^{(k)}(f)). $$
+
+如果在当前节点遮罩条件下不存在可行路径，则该业务流在时隙 $k$ 发生 outage：
+
+$$ \pi_f^{(k)}=\emptyset. $$
+
+RSMR 的逐流执行过程可以表示为
+
+$$ \mathcal{V}_{\mathrm{occ}}^{(k)}(1)=\emptyset, $$
+
+$$ \pi_f^{(k)} = \begin{cases} \pi_f^{(k-1)},& \text{if } \pi_f^{(k-1)} \text{ is feasible under } \mathcal{V}_{\mathrm{occ}}^{(k)}(f),\\\mathcal{P}_{\mathrm{mask}}^{(k)} (s_f,d_f|\mathcal{V}_{\mathrm{occ}}^{(k)}(f)), & \text{otherwise}, \end{cases} $$
+
+$$ \mathcal{V}_{\mathrm{occ}}^{(k)}(f+1) = \mathcal{V}_{\mathrm{occ}}^{(k)}(f) \cup \mathcal{R}(\pi_f^{(k)}). $$
+
+RSMR 的优点是切换动作较少，因为它不会主动更换仍然可用的路径。但其缺点也很明显：该方法完全是反应式的，只在当前路径已经失效或当前节点遮罩约束无法满足时才重路由。因此，当路径失效发生在高动态拓扑区域时，RSMR 容易产生被迫切换、峰值时延升高和临时可行路径受限等问题。它代表的是一种保守的被动维护策略，用于衡量不进行主动切换时的系统性能下界。
+
+---
+
+## 3. Fixed-window Advantageous Masked Rerouting, FAMR
+
+FAMR，即 **Fixed-window Advantageous Masked Rerouting**，中文可称为**固定窗口优势节点遮罩重路由**。该方法用于刻画一种规则式主动切换基线。与简单的固定提前量切换不同，FAMR 并不是在断链前固定某个时隙强制切换，而是在当前路径进入断链前固定预测窗口后，比较"当前提前切换到节点遮罩候选路径"和"继续保持至断链时刻再执行节点遮罩重路由"两种方案的累计代价。只有当前最佳提前切换方案优于断链后再切换方案时，FAMR 才执行主动切换。
+
+设第 $f$ 条业务流在时隙 $k$ 的当前路径为
+
+$$ \pi_f^{(k)}. $$
+
+其预测断链时刻定义为
+
+$$k_{b,f} = \min { t>k \mid \mathcal{E}(\pi_f^{(k)}) \not\subseteq \mathcal{E}^{(t)} }.$$
+
+若当前路径在预测范围内始终可用，则可令
+
+$$ k_{b,f}=+\infty. $$
+
+定义断链前固定预测窗口长度为 $W_{\mathrm{adv}}$。当
+
+$$ k \in {k_{b,f}-W_{\mathrm{adv}},\dots,k_{b,f}-1} $$
+
+时，第 $f$ 条流进入 FAMR 的主动判断窗口。若当前时隙尚未进入该窗口，则 FAMR 与 RSMR 一样保持当前路径：
+
+$$ \pi_f^{(k+)} = \pi_f^{(k)}. $$
+
+当进入主动判断窗口后，FAMR 比较两个方案的累计代价。第一种方案是继续保持当前路径直到断链时刻 $k_{b,f}$，然后在断链时刻执行节点遮罩重路由。其累计代价记为 $J_{\mathrm{break}}^{(k)}$。具体可以写为
+
+$$ J_{\mathrm{break}}^{(k)} = \sum_{t=k}^{k_{b,f}-1} T_f^{(t)}(\pi_f^{(k)}) + J_{\mathrm{reroute}}^{(k_{b,f})}. $$
+
+其中，$T_f^{(t)}(\pi_f^{(k)})$ 表示当前路径在未来时隙 $t$ 的端到端时延，$J_{\mathrm{reroute}}^{(k_{b,f})}$ 表示在断链时刻执行节点遮罩重路由产生的综合代价。该代价可以进一步表示为
+
+$$ J_{\mathrm{reroute}}^{(k_{b,f})} = T_f^{(k_{b,f})}(\pi_{\mathrm{br},f}) + \lambda_{\mathrm{setup}} T_{\mathrm{setup}}^{(k_{b,f})} (\pi_{\mathrm{br},f}|\pi_f^{(k)}) + \lambda_{\mathrm{new}} N_{\mathrm{new}} (\pi_{\mathrm{br},f}|\pi_f^{(k)}) + \lambda_{\mathrm{risk}} R_{\mathrm{risk}}(\pi_{\mathrm{br},f}), $$
+
+其中
+
+$$ \pi_{\mathrm{br},f} = \mathcal{P}_{\mathrm{mask}}^{(k_{b,f})} (s_f,d_f|\mathcal{V}_{\mathrm{occ}}^{(k_{b,f})}(f)). $$
+
+第二种方案是在当前时隙 $k$ 立即切换到某条节点遮罩候选路径。FAMR 首先生成候选路径集合
+
+$$ \mathcal{K}_f^{(k)} = {\pi_{f,1}^{(k)},\pi_{f,2}^{(k)},\dots,\pi_{f,K}^{(k)}}, $$
+
+其中任意候选路径均满足当前时隙的节点遮罩约束：
+
+$$ \mathcal{R}(\pi_{f,i}^{(k)}) \cap \mathcal{V}_{\mathrm{occ}}^{(k)}(f) = \emptyset. $$
+
+对于候选路径 $\pi_{f,i}^{(k)}$，其提前切换累计代价定义为
+
+$$ J_{\mathrm{early}}^{(k)}(\pi_{f,i}) = T_{\mathrm{setup}}^{(k)} (\pi_{f,i}^{(k)}|\pi_f^{(k)}) + \sum_{t=k}^{k+H} T_f^{(t)}(\pi_{f,i}^{(k)}) + \lambda_{\mathrm{new}} N_{\mathrm{new}} (\pi_{f,i}^{(k)}|\pi_f^{(k)}) + \lambda_{\mathrm{risk}} R_{\mathrm{risk}}(\pi_{f,i}^{(k)}). $$
+
+其中，$H$ 为未来代价评估窗口长度，$T_{\mathrm{setup}}^{(k)}$ 表示从当前路径切换至候选路径时引入的 PAT 建链代价，$N_{\mathrm{new}}$ 表示新增链路数量，$R_{\mathrm{risk}}$ 表示候选路径的未来寿命风险。
+
+FAMR 选择当前窗口内最优的提前切换候选：
+
+$$ \pi_{\mathrm{early},f}^{*} = \arg\min_{\pi_{f,i}\in\mathcal{K}_f^{(k)}} J_{\mathrm{early}}^{(k)}(\pi_{f,i}). $$
+
+如果该提前切换方案相对于断链后再切换具有足够收益，即满足
+
+$$ J_{\mathrm{early}}^{(k)}(\pi_{\mathrm{early},f}^{*}) + \eta < J_{\mathrm{break}}^{(k)}, $$
+
+则执行提前切换：
+
+$$ \pi_f^{(k+)} = \pi_{\mathrm{early},f}^{*}. $$
+
+否则继续保持当前路径：
+
+$$ \pi_f^{(k+)} = \pi_f^{(k)}. $$
+
+其中，$\eta$ 是切换收益阈值，用于抑制因微小代价差异造成的频繁切换。FAMR 因此不是简单的"到点就切"，而是固定预测窗口内的优势切换判断机制。
+
+FAMR 相比 RSMR 具有一定主动性，因为它会在断链前评估提前切换是否能降低累计代价；但相比 STC-MAPPO，它仍然依赖人工设置的预测窗口、代价函数和阈值，不能自适应学习不同拓扑、不同业务流和不同节点遮罩状态下的最优切换时序。因此，FAMR 的作用是检验 STC-MAPPO 的优势是否来自学习型自适应切换，而不仅仅是来自简单的提前重路由。
+
+---
+
+## 4. Greedy Proactive Masked Routing, GPMR
+
+GPMR，即 **Greedy Proactive Masked Routing**，中文可称为**贪心主动节点遮罩路由**。该方法用于刻画一种短视的主动规避策略。与 FAMR 不同，GPMR 不显式比较"现在切换"和"断链后再切换"的累计代价，而是在每个时隙直接评估候选路径对未来风险或未来遮罩压力的即时改善。如果某条候选路径能够在当前预测窗口内带来最大的未来风险下降，则 GPMR 立即执行切换。
+
+在时隙 $k$，设第 $f$ 条流的当前路径为 $\pi_f^{(k)}$。保持当前路径时的未来风险代价定义为 $N_{\mathrm{risk,keep},f}^{(k)}$。该风险可以由未来路径失效风险、节点遮罩压力、潜在互斥压力或未来不可行风险共同构成。一般可写为
+
+$$ N_{\mathrm{risk,keep},f}^{(k)} = \sum_{\Delta=0}^{W} \beta^{\Delta} \mathcal{Q}_f^{(k+\Delta)} (\pi_f^{(k)}), $$
+
+其中，$W$ 为未来预测窗口长度，$\beta\in(0,1]$ 为未来折扣因子，$\mathcal{Q}_f^{(k+\Delta)}(\cdot)$ 表示路径在未来时隙 $k+\Delta$ 的风险度量。例如，$\mathcal{Q}$ 可以包含路径是否即将断链、是否导致节点遮罩压力增大、是否造成潜在不可行状态等。
+
+对于任意候选路径 $\pi_{f,i}^{(k)}\in\mathcal{K}_f^{(k)}$，其未来风险定义为
+
+$$ N_{\mathrm{risk},f}^{(k)}(\pi_{f,i}) = \sum_{\Delta=0}^{W} \beta^{\Delta} \mathcal{Q}_f^{(k+\Delta)} (\pi_{f,i}^{(k)}). $$
+
+则该候选路径相对于保持当前路径的风险规避收益定义为
+
+$$ B_{\mathrm{avoid},f}^{(k)}(\pi_{f,i}) = N_{\mathrm{risk,keep},f}^{(k)} - N_{\mathrm{risk},f}^{(k)}(\pi_{f,i}). $$
+
+若 $B_{\mathrm{avoid},f}^{(k)}(\pi_{f,i})>0$，说明候选路径 $\pi_{f,i}^{(k)}$ 能够降低未来风险。GPMR 选择风险规避收益最大的候选动作：
+
+$$ \pi_{\mathrm{gpmr},f}^{*} = \arg\max_{\pi_{f,i}\in\mathcal{K}_f^{(k)}} B_{\mathrm{avoid},f}^{(k)}(\pi_{f,i}). $$
+
+如果最佳收益满足最低切换阈值
+
+$$ B_{\mathrm{avoid},f}^{(k)}(\pi_{\mathrm{gpmr},f}^{*}) \geq B_{\min}, $$
+
+则执行主动切换：
+
+$$ \pi_f^{(k+)} = \pi_{\mathrm{gpmr},f}^{*}. $$
+
+否则保持当前路径：
+
+$$ \pi_f^{(k+)} = \pi_f^{(k)}. $$
+
+为了避免在多个候选路径具有相同风险规避收益时随机选择，GPMR 使用端到端代价作为并列判据。具体而言，当存在多个候选路径具有相同的 $B_{\mathrm{avoid}}$ 时，GPMR 选择当前总代价最低的路径：
+
+$$ \pi_{\mathrm{gpmr},f}^{*} = \arg\min_{\pi_{f,i}\in\mathcal{S}_{\max}} \left[ T_f^{(k)}(\pi_{f,i}) + T_{\mathrm{setup}}^{(k)}(\pi_{f,i}|\pi_f^{(k)}) \right], $$
+
+其中
+
+$$ \mathcal{S}_{\max} = { \pi_{f,i} \mid B_{\mathrm{avoid},f}^{(k)}(\pi_{f,i}) = \max_j B_{\mathrm{avoid},f}^{(k)}(\pi_{f,j}) }. $$
+
+GPMR 仍然必须满足节点遮罩约束，因此候选路径集合 $\mathcal{K}_f^{(k)}$ 中的每条路径都需要满足
+
+$$ \mathcal{R}(\pi_{f,i}^{(k)}) \cap \mathcal{V}_{\mathrm{occ}}^{(k)}(f) = \emptyset. $$
+
+GPMR 的优势是主动性强，能够快速响应未来风险或潜在遮罩压力；但其缺点是决策短视。由于它只依据当前预测窗口内的即时风险收益进行贪心选择，因此容易在每次观察到风险下降机会时立即切换，导致切换次数和新建链路数量显著增加。与此相比，STC-MAPPO 通过长期奖励学习，不仅考虑未来风险下降，还同时考虑切换动作数、新建链路数、建链代价、路径寿命和全局多流协同影响。因此，GPMR 是用于验证"主动规避不等于最优切换时序"的重要基线方法。
+
 
 # 五、为什么用 MAPPO
 
@@ -1740,3 +1958,9 @@ $$
 \text{不是用 MAPPO 替代最短路，而是用 MAPPO 学习多条业务流在动态星间激光网络中的时空占用轨迹协调，使部分业务流能够在未来互斥冲突发生前主动切换路径，从而实现并发多源多宿通信的低冲突、低时延和高稳定路由。}  
 }  
 $$
+
+
+
+
+
+---

@@ -24,11 +24,7 @@ DEFAULT_CHECKPOINT = (
 DEFAULT_TRAFFIC = ROOT / "data/traffic/traffic_pairs_eval.npy"
 DEFAULT_OUTPUT = ROOT / "outputs/tables/method_compare.csv"
 
-from marl_lisl.baselines import (
-    MaintainUntilConflictPolicy,
-    ProactiveRuleBaseline,
-    ShortestDelayPolicy,
-)
+from marl_lisl.baselines.registry import build_baseline_policies
 from marl_lisl.envs import LISLMultiFlowEnv
 from marl_lisl.evaluation import Evaluator
 from marl_lisl.evaluation.result_writer import (
@@ -36,7 +32,6 @@ from marl_lisl.evaluation.result_writer import (
     print_results_table,
     write_results_csv,
 )
-from marl_lisl.evaluation.script_utils import baseline_policies
 from marl_lisl.utils.runtime_config import (
     load_checkpoint_mappo_config,
     load_runtime_env_config,
@@ -60,15 +55,13 @@ class MAPPODeterministicAdapter:
 
 
 def _policies(mode: str, config: dict) -> list[tuple[str, object]]:
-    """按评估模式构造完整 baseline 或轻量 future-mutex 诊断策略集合。"""
+    """按评估模式从 baseline 注册表构造策略，主脚本不依赖具体策略类。"""
     if mode == "diagnose":
-        return [
-            ("MaintainUntilConflict", MaintainUntilConflictPolicy()),
-            ("ShortestDelay", ShortestDelayPolicy()),
-            ("ProactiveRule", ProactiveRuleBaseline.from_config(config)),
-        ]
+        # 哪些方法属于诊断集合由 baseline 注册信息决定。后续调整方法时，
+        # 这里不需要同步维护另一份名称和构造器列表。
+        return build_baseline_policies(config, diagnostic_only=True)
     if mode in ("baselines", "all"):
-        return baseline_policies(config)
+        return build_baseline_policies(config)
     return []
 
 
