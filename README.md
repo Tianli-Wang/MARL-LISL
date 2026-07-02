@@ -53,6 +53,28 @@ pip install -r requirements.txt
 
 ## 完整数据准备流程
 
+### 一键执行全部流程
+
+在项目根目录运行以下命令，即可按依赖顺序完成数据预处理、环境检查、规则诊断、
+MAPPO 训练、专项评估和统一方法比较：
+
+```bash
+python run_all.py
+```
+
+入口支持断点式执行，也能临时缩小训练规模，且不会修改 YAML 配置：
+
+```bash
+python run_all.py --start-at env_test
+python run_all.py --start-at train --num-envs 2 --rollout-length 4 --total-updates 1 --max-eval-steps 5
+python run_all.py --dry-run
+```
+
+运行 `python run_all.py --help` 可查看起止步骤、跳过步骤、并行数、checkpoint
+和评估规模等选项。任一子流程失败时，入口会立即停止并返回失败步骤。
+
+### 手动执行数据准备
+
 将 721 个 STK 文件放到 `data/raw_stk/by_step/`，默认名称为
 `step_0000.txt` 至 `step_0720.txt`，然后在项目根目录运行：
 

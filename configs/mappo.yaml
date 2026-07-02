@@ -15,9 +15,9 @@ rollout_length: 32
 total_updates: 250
 
 # 必须与 env.yaml 中 num_flows 对齐。
-num_agents: 4
+num_agents: 16
 # 动作数 = 1 个保持动作 + num_candidates 个候选路径动作。
-num_actions: 5
+num_actions: 9
 # 单个动作候选的观测特征维度。
 obs_dim: 8
 # centralized critic 的全局 state 维度。
