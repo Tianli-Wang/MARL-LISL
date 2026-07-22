@@ -39,6 +39,11 @@ class ObservationBuilder:
         if cached is not None:
             self._path_cache.move_to_end(key)
             return cached
+        # 显式声明联合元素类型，防止类型检查器仅根据第一个 None 分支把整个
+        # 元组错误地推断成“首元素永远为 None”。
+        info: tuple[
+            np.ndarray | None, set[tuple[int, int]], float, float, float, float
+        ]
         if key[1] is None:
             info = (None, set(), 0.0, 0.0, 0.0, 0.0)
         else:

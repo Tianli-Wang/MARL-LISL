@@ -34,7 +34,6 @@ STEPS = (
     Step("env_test", "执行环境与 future-mutex 冒烟测试"),
     Step("proactive_rule", "执行主动规则策略诊断"),
     Step("train", "训练 MAPPO"),
-    Step("evaluate_mappo", "专项评估 MAPPO checkpoint"),
     Step("evaluate_methods", "统一比较 baseline 与 MAPPO"),
 )
 STEP_NAMES = tuple(step.name for step in STEPS)
@@ -69,8 +68,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--total-updates", type=int, default=None, help="临时覆盖 PPO 更新轮数")
     parser.add_argument("--test-steps", type=int, default=5, help="环境测试步数")
     parser.add_argument("--rule-steps", type=int, default=20, help="规则诊断步数")
-    parser.add_argument("--eval-episodes", type=int, default=1, help="专项评估 episode 数")
-    parser.add_argument("--eval-workers", type=int, default=1, help="专项评估进程数")
     parser.add_argument("--max-eval-steps", type=int, default=None, help="评估最大步数")
     parser.add_argument("--checkpoint", type=Path, default=None, help="评估模型；默认自动选最新模型")
     parser.add_argument("--force-pack", action="store_true", help="强制重建已有 pack")
@@ -134,14 +131,6 @@ def build_command(name: str, args: argparse.Namespace, checkpoint: Path | None) 
         add_optional(cmd, "--total-updates", args.total_updates)
     elif checkpoint is None:
         raise RuntimeError(f"步骤 {name} 缺少可用的 MAPPO checkpoint。")
-    elif name == "evaluate_mappo":
-        cmd = [
-            py, "scripts/run/04_evaluate_mappo.py", "--env-config", env,
-            "--mappo-config", mappo, "--checkpoint", str(checkpoint),
-            "--episodes", str(max(1, args.eval_episodes)),
-            "--workers", str(max(1, args.eval_workers)),
-        ]
-        add_optional(cmd, "--max-steps", args.max_eval_steps)
     elif name == "evaluate_methods":
         cmd = [
             py, "scripts/run/05_evaluate_methods.py", "--env-config", env,
@@ -161,7 +150,7 @@ def build_command(name: str, args: argparse.Namespace, checkpoint: Path | None) 
 def newest_checkpoint(mappo_config: Path) -> Path | None:
     """从配置的 run_root 中返回修改时间最新的 latest.pt。"""
     # PyYAML 是项目运行依赖，但延迟导入可让缺依赖环境仍能查看 --help 和 dry-run。
-    import yaml
+    import yaml  # type: ignore[import-untyped]  # PyYAML 官方包未内置类型声明
 
     with project_path(mappo_config).open("r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle) or {}
@@ -217,8 +206,8 @@ def main() -> None:
             raise SystemExit("用户中断，全流程已停止。") from exc
         print(f"步骤完成，用时 {time.perf_counter() - step_started:.1f} 秒")
 
-        # 没有显式指定模型时，让两个评估入口共同使用刚训练出的 checkpoint，
-        # 避免它们各自的历史默认路径导致比较对象不一致。
+        # 没有显式指定模型时，训练结束后重新扫描本轮生成的
+        # checkpoint，保证统一评估入口使用刚完成训练的模型。
         if step.name == "train" and args.checkpoint is None:
             checkpoint = newest_checkpoint(args.mappo_config)
             if checkpoint is None:

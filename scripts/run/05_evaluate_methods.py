@@ -13,14 +13,33 @@ from tempfile import TemporaryDirectory
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-# 默认数据与模型均选择当前仓库中已经生成并通过烟测的文件，使脚本无需参数
-# 即可完成 baseline + MAPPO 同口径评估；命令行参数仍可覆盖任意一项。
+
+def find_latest_checkpoint(run_root: Path) -> Path | None:
+    """在训练输出目录中查找最新的 ``latest.pt``。
+
+    每次运行 MAPPO 都会在 ``run_root`` 下创建一个独立实验目录，
+    因此这里遍历所有 ``*/checkpoints/latest.pt``，并以文件的最后
+    修改时间作为“最新训练结果”的判定依据。当修改时间相同时，
+    再按完整路径排序，保证选择结果稳定且可复现。
+
+    如果尚未产生任何 checkpoint，返回 ``None``，交由主程序根据
+    ``--methods`` 的取值决定是报错，还是仅评估 baseline。
+    """
+    candidates = list(run_root.glob("*/checkpoints/latest.pt"))
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda path: (path.stat().st_mtime_ns, str(path)),
+    )
+
+
+# 默认数据选择当前仓库已生成的文件；checkpoint 则在脚本
+# 启动时动态扫描，避免每次训练后手动修改时间戳目录。命令行
+# ``--checkpoint`` 仍可显式指定任意历史模型，以便复现旧实验。
 DEFAULT_ENV_CONFIG = ROOT / "configs/env.yaml"
 DEFAULT_MAPPO_CONFIG = ROOT / "configs/mappo.yaml"
-DEFAULT_CHECKPOINT = (
-    ROOT
-    / "outputs/runs/20260701_175147_mappo_a100_16flow_vec/checkpoints/latest.pt"
-)
+DEFAULT_CHECKPOINT = find_latest_checkpoint(ROOT / "outputs/runs")
 DEFAULT_TRAFFIC = ROOT / "data/traffic/traffic_pairs_eval.npy"
 DEFAULT_OUTPUT = ROOT / "outputs/tables/method_compare.csv"
 
@@ -32,6 +51,7 @@ from marl_lisl.evaluation.result_writer import (
     print_results_table,
     write_results_csv,
 )
+from marl_lisl.evaluation.path_writer import write_visualization_paths
 from marl_lisl.utils.runtime_config import (
     load_checkpoint_mappo_config,
     load_runtime_env_config,
@@ -78,7 +98,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--checkpoint", type=Path, default=DEFAULT_CHECKPOINT,
-        help=f"MAPPO checkpoint，默认：{DEFAULT_CHECKPOINT}",
+        help=(
+            "MAPPO checkpoint；默认自动选择 "
+            "outputs/runs/*/checkpoints/latest.pt 中修改时间最新的文件"
+        ),
     )
     parser.add_argument(
         "--traffic", type=Path, default=DEFAULT_TRAFFIC,
@@ -87,8 +110,8 @@ def main() -> None:
     parser.add_argument(
         "--methods",
         choices=("baselines", "diagnose", "mappo", "all"),
-        default="all",
-        help="评估方法集合，默认：all",
+        default="baselines",
+        help="评估方法集合，默认：baselines",
     )
     parser.add_argument(
         "--max-steps", type=int, default=None,
@@ -97,6 +120,11 @@ def main() -> None:
     parser.add_argument(
         "--output", type=Path, default=DEFAULT_OUTPUT,
         help=f"结果 CSV，默认：{DEFAULT_OUTPUT}",
+    )
+    parser.add_argument(
+        "--paths-output", type=Path, default="outputs/visualization_paths",
+        help=("可选的逐时隙路径导出根目录；输出可由 "
+              "Satellate-2D-visualization/starLinkWebUI.html 直接读取"),
     )
     parser.add_argument(
         "--preload-graphs", action="store_true", default=False,
@@ -112,18 +140,32 @@ def main() -> None:
         train_random_start=False,
     )
     output_path = resolve_project_path(ROOT, args.output)
+    paths_output = (
+        None if args.paths_output is None
+        else resolve_project_path(ROOT, args.paths_output)
+    )
+    time_index_path = ROOT / "data/sat_state/time_index.csv"
     results: list[dict] = []
     for name, policy in _policies(args.methods, env_config):
         env = LISLMultiFlowEnv(env_config)
-        results.append(
-            {"method": name, **Evaluator(env, policy, args.max_steps).run_episode()}
-        )
+        evaluator = Evaluator(env, policy, args.max_steps)
+        results.append({"method": name, **evaluator.run_episode()})
+        if paths_output is not None:
+            write_visualization_paths(
+                name, evaluator.path_history, paths_output, time_index_path
+            )
 
     if args.methods in ("mappo", "all"):
         if args.checkpoint is None:
             if args.methods == "mappo":
-                parser.error("--methods mappo 必须提供 --checkpoint")
-            warnings.warn("未提供 checkpoint，all 模式只评估 baseline。", stacklevel=2)
+                parser.error(
+                    "未在 outputs/runs 中找到 latest.pt，"
+                    "请先训练或通过 --checkpoint 显式指定模型"
+                )
+            warnings.warn(
+                "未在 outputs/runs 中找到 latest.pt，all 模式只评估 baseline。",
+                stacklevel=2,
+            )
         else:
             checkpoint = resolve_project_path(ROOT, args.checkpoint)
             if not checkpoint.is_file():
@@ -131,6 +173,9 @@ def main() -> None:
                     raise FileNotFoundError(f"MAPPO checkpoint 不存在: {checkpoint}")
                 warnings.warn(f"checkpoint 不存在，跳过 MAPPO: {checkpoint}", stacklevel=2)
             else:
+                # 输出本次自动或手动选中的模型，使评估日志能够明确
+                # 追溯到具体训练轮次，避免多个 run 并存时混淆结果。
+                print(f"MAPPO checkpoint: {checkpoint}")
                 # baseline-only 模式不会导入 PyTorch；只有确实评估 MAPPO 时才
                 # 加载训练器，减少启动时间并避免无关 CUDA/NumPy 环境错误。
                 from marl_lisl.algos.mappo import MAPPOTrainer
@@ -151,12 +196,18 @@ def main() -> None:
                     try:
                         trainer.load_checkpoint(checkpoint, load_optimizer=False)
                         policy = MAPPODeterministicAdapter(trainer)
+                        evaluator = Evaluator(env, policy, args.max_steps)
                         results.append(
                             {
                                 "method": "MAPPO",
-                                **Evaluator(env, policy, args.max_steps).run_episode(),
+                                **evaluator.run_episode(),
                             }
                         )
+                        if paths_output is not None:
+                            write_visualization_paths(
+                                "MAPPO", evaluator.path_history,
+                                paths_output, time_index_path,
+                            )
                     finally:
                         trainer.close()
 

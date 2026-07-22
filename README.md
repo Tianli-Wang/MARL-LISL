@@ -37,8 +37,7 @@ pip install -r requirements.txt
 | `scripts/run/01_test_env.py` | 统一的环境冒烟测试；支持基础 `reset/step`、future mutex 详情以及 train/eval/stress 数据集 |
 | `scripts/run/02_run_proactive_rule.py` | 逐时隙运行主动互斥规避规则，打印 keep/after mutex、动作、奖励和耗时 |
 | `scripts/run/03_train_mappo.py` | 创建单环境或多进程向量环境，训练 MAPPO 并保存指标和 checkpoint |
-| `scripts/run/04_evaluate_mappo.py` | 确定性评估 MAPPO checkpoint，支持多 episode 和多进程 |
-| `scripts/run/05_evaluate_methods.py` | 统一评估全部 baseline、轻量互斥诊断策略和可选 MAPPO，并输出同口径 CSV |
+| `scripts/run/05_evaluate_methods.py` | 统一评估 baseline、互斥诊断策略和 MAPPO，支持自动选择最新 checkpoint、输出同口径 CSV 及可视化路径 |
 
 ### 数据预处理入口
 
@@ -56,7 +55,7 @@ pip install -r requirements.txt
 ### 一键执行全部流程
 
 在项目根目录运行以下命令，即可按依赖顺序完成数据预处理、环境检查、规则诊断、
-MAPPO 训练、专项评估和统一方法比较：
+MAPPO 训练和统一方法评估：
 
 ```bash
 python run_all.py
@@ -161,17 +160,17 @@ python scripts/run/02_run_proactive_rule.py --config configs/env.yaml --full-epi
 脚本打印 `future_mutex_keep`、联合动作后的 `future_mutex_after`、实际规避量、路径
 切换、新链路和掉线数量。它是逐步诊断入口，不用于批量方法对比。
 
-## MAPPO 训练与专项评估
+## MAPPO 训练与统一评估
 
 ```bash
 python scripts/run/03_train_mappo.py \
   --env-config configs/env.yaml --mappo-config configs/mappo.yaml
 
-python scripts/run/04_evaluate_mappo.py \
+python scripts/run/05_evaluate_methods.py \
   --env-config configs/env.yaml \
   --mappo-config configs/mappo.yaml \
   --checkpoint outputs/runs/<run>/checkpoints/latest.pt \
-  --episodes 4 --workers 4
+  --methods mappo
 ```
 
 训练支持 subprocess vectorized env、共享 Actor、centralized Critic、action mask、
@@ -180,8 +179,8 @@ GAE、clipped PPO、CSV metrics 和 checkpoint。`num_agents` 必须等于 `num_
 
 ## 统一方法评估
 
-`05_evaluate_methods.py` 取代了原来的 `run_baselines.py`、
-`diagnose_future_mutex.py` 和 `evaluate_all_methods.py`。
+`05_evaluate_methods.py` 是唯一评估入口，取代了原来的 MAPPO 专项评估、
+`run_baselines.py`、`diagnose_future_mutex.py` 和 `evaluate_all_methods.py`。
 
 ```bash
 # 所有 baseline

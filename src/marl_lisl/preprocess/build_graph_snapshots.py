@@ -150,10 +150,12 @@ def _build_and_save_snapshot(k: int) -> tuple[int, int]:
     edge_index, edge_attr = build_snapshot(
         _GRAPH_STATES[k],
         _GRAPH_VALID_MASK[k],
-        float(_GRAPH_PARAMS["d_max_m"]),
-        float(_GRAPH_PARAMS["earth_radius_m"]),
-        float(_GRAPH_PARAMS["speed_of_light_m_s"]),
-        float(_GRAPH_PARAMS["default_capacity"]),
+        # worker 参数字典还包含嵌套配置，故值类型为 object；这些键在父进程中
+        # 已规范为数值，用字符串中转可让静态检查和运行时转换都保持明确。
+        float(str(_GRAPH_PARAMS["d_max_m"])),
+        float(str(_GRAPH_PARAMS["earth_radius_m"])),
+        float(str(_GRAPH_PARAMS["speed_of_light_m_s"])),
+        float(str(_GRAPH_PARAMS["default_capacity"])),
         _GRAPH_PARAMS["setup_delay_cfg"],  # type: ignore[arg-type]
     )
     np.savez_compressed(_GRAPH_DIR / f"graph_{k:04d}.npz",

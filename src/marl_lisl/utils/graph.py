@@ -77,7 +77,9 @@ def ensure_edge_key_index(
         else:
             graph["_edge_keys_sorted"] = keys
             graph["_edge_ids_sorted"] = np.arange(len(keys), dtype=np.int64)
-        graph["_edge_key_num_sats"] = num_sats
+        # 原始图字段都是数组，但此处额外缓存整数规模标记；局部忽略这一已知的
+        # 扩展字段差异，同时保留函数签名对输入数组的约束。
+        graph["_edge_key_num_sats"] = num_sats  # type: ignore[assignment]
     return graph["_edge_keys_sorted"], graph["_edge_ids_sorted"]
 
 

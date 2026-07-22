@@ -80,6 +80,9 @@ class FutureMutexDetector:
         if key in self._path_cache:
             self._path_cache.move_to_end(key)
             return self._path_cache[key]
+        # 空路径和有效路径共用固定返回结构；显式标注可避免空元组分支把
+        # occupied 的类型过窄地推断成 tuple[()]。
+        info: tuple[np.ndarray, tuple[int, ...], frozenset[int]]
         if key is None:
             info = (np.empty(0, dtype=np.int64), (), frozenset())
         else:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -49,7 +50,7 @@ class LISLMultiFlowEnv:
             from marl_lisl.store.packed_graph_store import PackedGraphStore
 
             pack_dir = config.get("graph_pack_dir")
-            self.graph_store = PackedGraphStore(
+            self.graph_store: Any = PackedGraphStore(
                 Path(config["graph_dir"]),
                 pack_dir=Path(pack_dir) if pack_dir else None,
                 cache_size=max(graph_cache_size, 32),
@@ -71,7 +72,9 @@ class LISLMultiFlowEnv:
         self.path_generator = PathGenerator(self.num_candidates, config["path_weight"])
         candidates_cfg = dict(config.get("candidates", {}))
         self.use_precomputed_candidates = bool(candidates_cfg.get("enabled", False))
-        self.candidate_store: CandidateStore | None = None
+        # NPZ 与 packed memmap 后端暴露相同接口但没有共同基类，因此这里明确
+        # 使用鸭子类型，避免类型检查器把变量错误限制为 CandidateStore。
+        self.candidate_store: Any = None
         if self.use_precomputed_candidates:
             candidate_dir = config.get("candidate_dir")
             if candidate_dir is None:
@@ -325,9 +328,13 @@ class LISLMultiFlowEnv:
         old_paths = [None if path is None else list(path) for path in self.current_paths]
         new_paths: list[list[int] | None] = []
         invalid_action_count = 0
+        # 逐流保留非法动作标记，供路径导出时生成 Setup_Failures；汇总指标仍继续
+        # 使用 invalid_action_count，因而不会改变已有 reward 和评估口径。
+        invalid_actions = np.zeros(self.num_flows, dtype=bool)
         for flow_id, action in enumerate(actions.tolist()):
             if action < 0 or action > self.num_candidates or action_mask[flow_id, action] == 0:
                 invalid_action_count += 1
+                invalid_actions[flow_id] = True
                 new_paths.append(None)
             elif action == 0:
                 new_paths.append(old_paths[flow_id])
@@ -338,6 +345,7 @@ class LISLMultiFlowEnv:
         feasible = np.zeros(self.num_flows, dtype=bool)
         switch_count = 0
         new_link_count = 0
+        route_details: list[dict] = []
         for flow_id, (old_path, new_path) in enumerate(zip(old_paths, new_paths)):
             if new_path != old_path:
                 switch_count += 1
@@ -347,6 +355,32 @@ class LISLMultiFlowEnv:
             if features[5] == 1:
                 feasible[flow_id] = True
                 delays[flow_id] = float(features[0] + features[1])
+
+            # 导出字段全部基于环境实际落地后的路径，而不是策略请求的动作。距离取
+            # 当前路径所有 ISL 之和；建链惩罚沿用 observation 中“新增链路最大
+            # setup delay”的定义。路径为空或不可行时记一次 setup failure。
+            path_edge_ids = edge_ids_for_node_path(graph, new_path, self.num_sats)
+            total_distance_km = (
+                0.0
+                if path_edge_ids is None
+                else float(graph["edge_attr"][path_edge_ids, 0].sum() / 1000.0)
+            )
+            source, dest, _demand = self.traffic_pairs[flow_id]
+            route_details.append(
+                {
+                    "flow_id": int(flow_id),
+                    "source": int(source),
+                    "target": int(dest),
+                    "path": None if new_path is None else list(new_path),
+                    "hops": 0 if new_path is None else max(0, len(new_path) - 1),
+                    "total_isl_distance_km": total_distance_km,
+                    "setup_penalty_ms": float(features[1] * 1000.0),
+                    "setup_failures": int(
+                        invalid_actions[flow_id] or not feasible[flow_id]
+                    ),
+                    "link_maintained": bool(new_path == old_path and new_path is not None),
+                }
+            )
 
         self.current_paths = new_paths
         outage_count = self.conflict_detector.count_outages(self.current_paths, graph)
@@ -370,6 +404,7 @@ class LISLMultiFlowEnv:
             "k": step_k,
             "future_mutex": float(future_mutex),
             "future_mutex_info": future_mutex_info,
+            "route_details": route_details,
         })
 
         self.k += 1

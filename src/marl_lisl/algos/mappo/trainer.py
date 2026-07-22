@@ -72,7 +72,10 @@ class MAPPOTrainer:
             self.policy.parameters(), lr=float(mappo_config["learning_rate"])
         )
         self.buffer = RolloutBuffer(
-            int(mappo_config["rollout_length"]), self.num_envs, *configured[:3], configured[3],
+            # 逐项传参而不使用星号展开：既让类型检查器能够核对参数数量，也避免
+            # 后续调整 configured 元组结构时静默地把错误维度传给缓冲区。
+            int(mappo_config["rollout_length"]), self.num_envs,
+            configured[0], configured[1], configured[2], configured[3],
             float(mappo_config["gamma"]), float(mappo_config["gae_lambda"]),
         )
         output_cfg = mappo_config["output"]
@@ -297,8 +300,8 @@ class MAPPOTrainer:
         """确定性评估若干 episode，可用 max_steps 执行快速短轨迹验证。"""
         if self.num_envs != 1:
             raise NotImplementedError(
-                "MAPPOTrainer.evaluate expects a single env; use scripts/run/04_evaluate_mappo.py "
-                "for checkpoints trained with vectorized rollout."
+                "MAPPOTrainer.evaluate 仅支持单环境；请使用 "
+                "scripts/run/05_evaluate_methods.py 对 checkpoint 进行统一评估。"
             )
         totals: list[dict[str, float]] = []
         for _ in range(int(num_episodes)):

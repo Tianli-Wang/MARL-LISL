@@ -6,7 +6,7 @@ from copy import deepcopy
 import multiprocessing as mp
 from multiprocessing.connection import Connection
 import traceback
-from typing import Any
+from typing import Any, cast
 import warnings
 
 import numpy as np
@@ -112,7 +112,9 @@ class SubprocVectorEnv:
             )
         self.start_method = selected_method
         print(f"SubprocVectorEnv start method: {self.start_method}")
-        context = mp.get_context(self.start_method)
+        # typeshed 对不同 Python 版本的 multiprocessing context 暴露不完整；
+        # 运行时对象始终提供 Pipe/Process，这里用 Any 表达该跨平台工厂接口。
+        context: Any = mp.get_context(self.start_method)
         try:
             for worker_id in range(self.num_envs):
                 parent_remote, child_remote = context.Pipe()
@@ -130,7 +132,9 @@ class SubprocVectorEnv:
                     child_remote.close()
                     raise
                 child_remote.close()
-                self._remotes.append(parent_remote)
+                # Windows 上 Pipe() 的静态返回名为 PipeConnection，实际完整实现
+                # multiprocessing.connection.Connection 协议，统一转换后再保存。
+                self._remotes.append(cast(Connection, parent_remote))
                 self._processes.append(process)
         except BaseException:
             self.close()

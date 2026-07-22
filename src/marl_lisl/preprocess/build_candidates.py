@@ -6,6 +6,7 @@ import json
 import os
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
+from typing import Any
 from typing import Literal
 
 import numpy as np
@@ -80,7 +81,8 @@ def _build_one_candidate_file(k: int) -> tuple[int, int, int]:
     ):
         raise RuntimeError("Candidate worker was not initialized")
     if _CANDIDATE_GRAPH_BACKEND == "packed":
-        graph_store = PackedGraphStore(
+        # 两种后端都提供 get_graph；使用鸭子类型避免首个分支造成过窄推断。
+        graph_store: Any = PackedGraphStore(
             _CANDIDATE_GRAPH_DIR,
             pack_dir=_CANDIDATE_GRAPH_PACK_DIR,
             cache_size=1,

@@ -60,16 +60,17 @@ updates、PPO epochs 和候选路径数。
 ## 评估
 
 ```bash
-python scripts/run/04_evaluate_mappo.py \
+python scripts/run/05_evaluate_methods.py \
   --env-config configs/env.yaml \
   --mappo-config configs/mappo.yaml \
   --checkpoint outputs/runs/<run>/checkpoints/latest.pt \
-  --episodes 4 --workers 4
+  --methods mappo
 ```
 
-评估使用 action mask 后 logits 的 argmax，输出并保存 total reward、时延、future
-mutex、outage、switch 和新链路数量。多个 episode 之间相互独立，可通过
-`--workers` 使用多进程并行评估。
+统一评估入口使用 action mask 后 logits 的 argmax，输出并保存
+total reward、时延、future mutex、outage、switch、新链路数量和
+非法动作数。使用 `--methods all` 可让 MAPPO 与所有已注册 baseline
+在相同 traffic 上按同一口径比较。
 
 ## 当前限制
 

@@ -9,7 +9,7 @@ from typing import Any
 def load_yaml(path: Path) -> dict[str, Any]:
     """Load a YAML mapping with a clear dependency/error message."""
     try:
-        import yaml
+        import yaml  # type: ignore[import-untyped]  # PyYAML 官方包未内置类型声明
     except ImportError as exc:  # pragma: no cover
         raise ImportError("PyYAML is required; install it with: pip install pyyaml") from exc
     path = Path(path)

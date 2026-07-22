@@ -28,10 +28,10 @@ class BaselineSpec:
 # baseline 的唯一总清单：评估主脚本不再直接依赖任何具体策略类。
 BASELINE_SPECS: tuple[BaselineSpec, ...] = (
     BaselineSpec("RSMR", RSMRPolicy.from_config),
-    BaselineSpec("ShortestDelay", lambda _config: ShortestDelayPolicy(), True),
-    BaselineSpec("MaintainUntilConflict", lambda _config: MaintainUntilConflictPolicy(), True),
-    BaselineSpec("GreedyConflictAware", lambda _config: GreedyConflictAwarePolicy()),
-    BaselineSpec("ProactiveRule", ProactiveRuleBaseline.from_config, True),
+    # BaselineSpec("ShortestDelay", lambda _config: ShortestDelayPolicy(), True),
+    # BaselineSpec("MaintainUntilConflict", lambda _config: MaintainUntilConflictPolicy(), True),
+    # BaselineSpec("GreedyConflictAware", lambda _config: GreedyConflictAwarePolicy()),
+    # BaselineSpec("ProactiveRule", ProactiveRuleBaseline.from_config, True),
 )
 
 

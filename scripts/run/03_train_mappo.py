@@ -5,6 +5,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 for _var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
     os.environ.setdefault(_var, "1")
@@ -68,7 +69,8 @@ def main() -> None:
     try:
         num_envs = int(mappo_config.get("num_envs", 1))
         if num_envs > 1:
-            env = SubprocVectorEnv(
+            # 单环境和向量环境满足同一训练接口，但没有共同名义基类。
+            env: Any = SubprocVectorEnv(
                 env_config,
                 num_envs,
                 start_method=str(mappo_config.get("multiprocessing_start_method", "auto")),
