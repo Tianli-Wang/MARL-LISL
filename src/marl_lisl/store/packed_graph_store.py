@@ -129,9 +129,11 @@ class PackedGraphStore:
         self.edge_index = np.load(self.pack_dir / _EDGE_INDEX_NAME, mmap_mode="r")
         self.edge_attr = np.load(self.pack_dir / _EDGE_ATTR_NAME, mmap_mode="r")
         self.cache_size = max(1, int(cache_size))
-        self._cache: OrderedDict[int, dict[str, np.ndarray]] = OrderedDict()
+        # 快照字典同时保存 NumPy 数组、时隙号与运行时派生索引，
+        # 使用开放字典类型与 lazy GraphStore 的公共接口保持一致。
+        self._cache: OrderedDict[int, dict] = OrderedDict()
 
-    def get_graph(self, k: int) -> dict[str, np.ndarray]:
+    def get_graph(self, k: int) -> dict:
         k = int(k)
         if k < 0:
             raise IndexError(f"Graph timeslot must be non-negative, got {k}")
@@ -148,6 +150,10 @@ class PackedGraphStore:
         graph = {
             "edge_index": self.edge_index[:, start:end],
             "edge_attr": self.edge_attr[start:end],
+            # 显式保存时隙号，供路径特征与在线寻路缓存使用。
+            # memmap 切片的 Python 对象 ID 在 LRU 淘汰后会被复用，
+            # 而时隙号在同一图数据集中始终稳定且唯一。
+            "_snapshot_k": k,
         }
         self._cache[k] = graph
         self._cache.move_to_end(k)

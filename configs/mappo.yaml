@@ -20,8 +20,8 @@ num_agents: 16
 num_actions: 9
 # 单个动作候选的观测特征维度。
 obs_dim: 8
-# centralized critic 的全局 state 维度。
-state_dim: 7
+# centralized critic 的 state 维度：7 个全局量 + 16 条流 × 10 个逐流摘要。
+state_dim: 167
 
 # 折扣因子。
 gamma: 0.99
@@ -30,23 +30,32 @@ gae_lambda: 0.95
 
 # PPO policy clipping 范围。
 clip_ratio: 0.2
-# value clipping 范围，稳定 critic 更新。
-value_clip_range: 0.2
+# 启用 ValueNorm 后先关闭 value clipping：运行均值/方差更新会改变标准化坐标，
+# 独立 Critic 梯度裁剪已负责限制单次更新。若关闭 ValueNorm，可再设为 0.2。
+value_clip_range: null
 # 近似 KL 超过该值时提前停止本轮 PPO epoch。
 target_kl: 0.03
 # 每个 rollout 重复训练多少轮 PPO。
 ppo_epochs: 3
-# PPO minibatch 大小；样本数为 num_envs * rollout_length。
-minibatch_size: 1024
+# PPO minibatch 大小；当前每轮有 20×32=640 个样本，256 可产生 3 个
+# minibatch，避免旧值 1024 导致每个 epoch 实际只有一次 Critic 更新。
+minibatch_size: 256
 
-# Adam 学习率。
+# 旧配置兼容用的统一 Adam 学习率；新训练优先读取下面两项独立学习率。
 learning_rate: 0.0002
+# Actor 学习率保持原值，避免 Critic 修复同时放大策略更新。
+actor_learning_rate: 0.0002
+# Critic 使用更高学习率，以更快跟上非平稳的联合策略回报。
+critic_learning_rate: 0.0005
 # critic loss 权重。
 value_coef: 0.5
 # entropy bonus 权重；鼓励探索，过大时会导致切换过多。
 entropy_coef: 0.003
-# 梯度裁剪阈值。
+# 旧配置兼容用的统一梯度裁剪阈值。
 max_grad_norm: 0.5
+# Actor 与 Critic 分开反向传播、分开裁剪。
+max_actor_grad_norm: 0.5
+max_critic_grad_norm: 1.0
 
 # 是否标准化 advantage，通常保持 true。
 normalize_advantages: true
@@ -90,6 +99,15 @@ critic:
   num_layers: 3
   # 激活函数。
   activation: relu
+  # 按特征维护运行均值/方差；相比逐样本 LayerNorm，能保留绝对拓扑与冲突水平。
+  state_normalization: running
+  # 标准化 state 的裁剪范围，防止未见过的极端拓扑统计产生异常梯度。
+  state_normalization_clip: 10.0
+  # Critic 拟合标准化 return；GAE 与评估仍使用反标准化后的原始 reward 尺度。
+  value_normalization: true
+  # 运行统计的伪样本数与标准化分母 epsilon。
+  running_statistics_epsilon: 0.0001
+  normalization_epsilon: 0.00000001
 
 # 日志、checkpoint 与在线评估频率。
 logging:
@@ -97,8 +115,26 @@ logging:
   log_interval: 5
   # 每多少个 update 保存一次 checkpoint。
   save_interval: 50
-  # 训练过程中评估间隔；0 表示关闭在线评估。
+  # 旧配置兼容字段；新训练使用下面独立 validation.interval。
   eval_interval: 0
+
+# 固定验证与模型选择。训练 rollout 仍使用 train traffic 和随机起点；这里始终
+# 使用 eval traffic、k=0 和确定性 argmax，专门防止 latest 后期退化。
+validation:
+  enabled: true
+  # 每 25 个 update 完整验证一次，同时允许捕获 50 与 100 之间的最佳点。
+  interval: 25
+  traffic_split: eval
+  episode_start: 0
+  # null 表示使用 num_steps，即完整运行 721 个时隙。
+  episode_length: 721
+  max_steps: null
+  num_episodes: 1
+  seed: 42
+  # 连续 3 次固定验证未改善时提前结束；首次验证一定会生成 best.pt。
+  early_stopping_patience: 3
+  # 至少训练到 75 update 才允许早停，避免初期偶然波动过早终止。
+  early_stopping_min_updates: 75
 
 # 输出目录配置。
 output:

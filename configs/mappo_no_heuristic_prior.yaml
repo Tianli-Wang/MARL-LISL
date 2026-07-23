@@ -1,0 +1,84 @@
+# 无启发式先验消融实验配置：除 Actor 的 heuristic_prior 外，与正式 MAPPO
+# 配置保持一致。独立文件可保证正式实验配置不被临时消融实验覆盖。
+seed: 42
+device: cuda
+torch_num_threads: 8
+
+multiprocessing_start_method: auto
+num_envs: 20
+rollout_length: 32
+total_updates: 250
+
+num_agents: 16
+num_actions: 9
+obs_dim: 8
+state_dim: 167
+
+gamma: 0.99
+gae_lambda: 0.95
+clip_ratio: 0.2
+value_clip_range: null
+target_kl: 0.03
+ppo_epochs: 3
+minibatch_size: 256
+learning_rate: 0.0002
+actor_learning_rate: 0.0002
+critic_learning_rate: 0.0005
+value_coef: 0.5
+entropy_coef: 0.003
+max_grad_norm: 0.5
+max_actor_grad_norm: 0.5
+max_critic_grad_norm: 1.0
+normalize_advantages: true
+
+actor:
+  hidden_dim: 256
+  num_layers: 3
+  activation: relu
+  normalize_input: true
+  heuristic_prior:
+    # 唯一消融变量：不再把时延、建链和 mutex 等手工规则直接加到 Actor logits。
+    # Actor 仅能从训练奖励与自身网络参数中学习动作偏好。
+    enabled: false
+    scale: 1.0
+    delay: 4.0
+    setup: 4.0
+    new_link: 0.08
+    hops: 0.0
+    mutex: 5.0
+    avoid: 0.0
+    keep_bonus: 0.05
+
+critic:
+  hidden_dim: 512
+  num_layers: 3
+  activation: relu
+  # 与正式配置保持完全相同；本消融只关闭 Actor heuristic prior。
+  state_normalization: running
+  state_normalization_clip: 10.0
+  value_normalization: true
+  running_statistics_epsilon: 0.0001
+  normalization_epsilon: 0.00000001
+
+logging:
+  log_interval: 5
+  save_interval: 50
+  eval_interval: 0
+
+validation:
+  # 消融实验必须采用与正式 MAPPO 完全相同的固定验证和早停口径。
+  enabled: true
+  interval: 25
+  traffic_split: eval
+  episode_start: 0
+  episode_length: 721
+  max_steps: null
+  num_episodes: 1
+  seed: 42
+  early_stopping_patience: 3
+  early_stopping_min_updates: 75
+
+output:
+  run_root: outputs/runs
+  # 输出目录名称显式标记 no_prior，避免与正式模型或其他消融混淆。
+  experiment_name: mappo_no_heuristic_prior_16flow_vec

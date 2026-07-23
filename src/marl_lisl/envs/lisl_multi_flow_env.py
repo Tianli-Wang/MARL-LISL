@@ -21,13 +21,31 @@ from marl_lisl.utils.graph import edge_ids_for_node_path, edge_path_from_node_pa
 
 class LISLMultiFlowEnv:
     obs_dim = 8
-    state_dim = 7
+    # state 的前 7 维必须永久保持原顺序，以便 state_dim=7 的历史 Critic
+    # 仍可在新环境中截取这个前缀完成评估。
+    legacy_state_dim = 7
+    # 每条流不直接摊平全部候选，而是提取当前路径与两个候选 Pareto 端点的
+    # 10 个摘要特征；这样随候选数增长时 Critic 输入维度仍保持可控。
+    per_flow_state_dim = 10
+    # 类属性仅作为旧代码的保守默认值；每个环境实例会在读取 num_flows 后
+    # 覆盖为 ``7 + 10 * num_flows``。
+    state_dim = legacy_state_dim
+
+    @classmethod
+    def state_size(cls, num_flows: int) -> int:
+        """返回指定业务流数量对应的集中式 Critic state 维度。"""
+
+        num_flows = int(num_flows)
+        if num_flows <= 0:
+            raise ValueError("num_flows 必须大于 0")
+        return cls.legacy_state_dim + cls.per_flow_state_dim * num_flows
 
     def __init__(self, config: dict):
         self.config = config
         self.num_steps = int(config["num_steps"])
         self.num_sats = int(config["num_sats"])
         self.num_flows = int(config["num_flows"])
+        self.state_dim = self.state_size(self.num_flows)
         self.num_candidates = int(config["num_candidates"])
         self.parallel_workers = max(1, int(config.get("parallel_workers", 1)))
         env_cfg = config["env"]
@@ -237,7 +255,33 @@ class LISLMultiFlowEnv:
         """
         return self._compute_future_mutex(self.current_paths, self.k)
 
-    def _build_state(self, graph: dict, future_mutex: float = 0.0) -> np.ndarray:
+    def _build_state(
+        self,
+        graph: dict,
+        obs: np.ndarray,
+        mask: np.ndarray,
+        future_mutex: float = 0.0,
+    ) -> np.ndarray:
+        """构建“全局 7 维 + 每流 10 维摘要”的 centralized state。
+
+        每流候选摘要只统计 action 1..K 中 ``mask > 0`` 的真实可行候选。
+        不可行候选的 observation 是全零，如果直接参与最小值会被误判成零时延、
+        零互斥的最优路径，因此这里必须先用 mask 过滤。
+        """
+
+        expected_obs_shape = (
+            self.num_flows,
+            self.num_candidates + 1,
+            self.obs_dim,
+        )
+        expected_mask_shape = (self.num_flows, self.num_candidates + 1)
+        if obs.shape != expected_obs_shape or mask.shape != expected_mask_shape:
+            raise ValueError(
+                "构建 Critic state 时 observation/mask 形状不匹配: "
+                f"obs 期望 {expected_obs_shape}、实际 {obs.shape}; "
+                f"mask 期望 {expected_mask_shape}、实际 {mask.shape}"
+            )
+
         attrs = graph["edge_attr"]
         summary = graph.get("_state_summary")
         if summary is None:
@@ -252,8 +296,8 @@ class LISLMultiFlowEnv:
         active = self.num_flows - self.conflict_detector.count_outages(
             self.current_paths, graph
         )
-        return np.asarray(
-            [
+        global_state = np.asarray(
+            (
                 self.k / max(self.num_steps - 1, 1),
                 edge_count,
                 mean_attr_0,
@@ -261,9 +305,61 @@ class LISLMultiFlowEnv:
                 mean_attr_3,
                 active,
                 float(future_mutex),
-            ],
+            ),
             dtype=np.float32,
         )
+        flow_state = np.zeros(
+            (self.num_flows, self.per_flow_state_dim), dtype=np.float32
+        )
+        for flow_id in range(self.num_flows):
+            keep = obs[flow_id, 0]
+            # 当前路径状态：是否仍可行、传播时延、最短剩余寿命和跳数。
+            # keep 的 setup/new-link 固定为 0，无需重复加入 state。
+            flow_state[flow_id, 0:4] = (
+                mask[flow_id, 0],
+                keep[0],
+                keep[2],
+                keep[4],
+            )
+
+            candidate_mask = mask[flow_id, 1:] > 0.0
+            # 正常配置至少有一个候选；仍显式兼容 K=0，避免空数组 mean 产生
+            # NaN 并污染整个 state。
+            flow_state[flow_id, 4] = (
+                float(candidate_mask.mean()) if candidate_mask.size else 0.0
+            )
+            valid_indices = np.flatnonzero(candidate_mask)
+            if valid_indices.size == 0:
+                # legal ratio 已明确表明“没有可行候选”，其余字段保持 0 是稳定且
+                # 可归一化的哨兵，不再用无效 observation 的零值参与 argmin。
+                continue
+
+            candidates = obs[flow_id, 1:][valid_indices]
+            candidate_total_delay = candidates[:, 0] + candidates[:, 1]
+
+            # 时延端点：保留最小时延候选本身的新链路数量，避免把来自不同动作的
+            # 独立最小值拼成一个现实中不存在的“虚假最优候选”。
+            delay_best = int(np.argmin(candidate_total_delay))
+            flow_state[flow_id, 5] = candidate_total_delay[delay_best]
+            flow_state[flow_id, 6] = candidates[delay_best, 3]
+
+            # 互斥端点：同时保留该候选的总时延和新链路数量，让 Critic 能判断
+            # 降低未来冲突需要付出多少时延与切换代价。
+            mutex_best = int(np.argmin(candidates[:, 6]))
+            flow_state[flow_id, 7] = candidates[mutex_best, 6]
+            flow_state[flow_id, 8] = candidate_total_delay[mutex_best]
+            flow_state[flow_id, 9] = candidates[mutex_best, 3]
+
+        state = np.concatenate((global_state, flow_state.reshape(-1))).astype(
+            np.float32, copy=False
+        )
+        if state.shape != (self.state_dim,) or not np.all(np.isfinite(state)):
+            raise RuntimeError(
+                "集中式 Critic state 构建失败: "
+                f"期望 ({self.state_dim},)，实际 {state.shape}，"
+                f"全为有限数={bool(np.all(np.isfinite(state)))}"
+            )
+        return state
 
     def _prepare_current(self) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray]:
         """Build (and memoize) the current timeslot's graph/obs/state/mask.
@@ -276,7 +372,7 @@ class LISLMultiFlowEnv:
         graph = self.graph_store.get_graph(self.k)
         self._candidate_paths = self._generate_candidates(graph)
         obs, mask, future_mutex = self._build_observations(graph, self._candidate_paths)
-        state = self._build_state(graph, future_mutex)
+        state = self._build_state(graph, obs, mask, future_mutex)
         self._prepared_cache = (graph, obs, state, mask)
         self._prepared_k = self.k
         return self._prepared_cache
@@ -309,7 +405,7 @@ class LISLMultiFlowEnv:
         self._candidate_paths = self._generate_candidates(graph)
         self.current_paths = [paths[0] if paths else None for paths in self._candidate_paths]
         obs, mask, future_mutex = self._build_observations(graph, self._candidate_paths)
-        state = self._build_state(graph, future_mutex)
+        state = self._build_state(graph, obs, mask, future_mutex)
         self._prepared_cache = (graph, obs, state, mask)
         self._prepared_k = self.k
         return obs, state, mask
@@ -384,6 +480,17 @@ class LISLMultiFlowEnv:
 
         self.current_paths = new_paths
         outage_count = self.conflict_detector.count_outages(self.current_paths, graph)
+        # ObservationBuilder 与 ConflictDetector 必须对当前图上的路径
+        # 可行性得出完全相同的结论。该检查专门防止路径特征
+        # 缓存串用时隙：如果观测认为路径可行，但真实边集
+        # 检查认为已断链，立即终止并报出定位所需的时隙和数量。
+        feature_outage_count = self.num_flows - int(feasible.sum())
+        if feature_outage_count != outage_count:
+            raise RuntimeError(
+                "路径可行性检查不一致: "
+                f"k={step_k}, path_features_outage={feature_outage_count}, "
+                f"graph_outage={outage_count}"
+            )
         future_mutex, future_mutex_info = self._compute_future_mutex(
             self.current_paths, step_k
         )

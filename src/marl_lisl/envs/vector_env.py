@@ -70,7 +70,10 @@ class SubprocVectorEnv:
         self.num_flows = int(env_config["num_flows"])
         self.num_candidates = int(env_config["num_candidates"])
         self.obs_dim = LISLMultiFlowEnv.obs_dim
-        self.state_dim = LISLMultiFlowEnv.state_dim
+        self.legacy_state_dim = LISLMultiFlowEnv.legacy_state_dim
+        # state 维度随业务流数量变化，必须复用环境的唯一计算公式；若继续读取
+        # 旧的类常量 7，主进程会给 rollout buffer 分配错误形状。
+        self.state_dim = LISLMultiFlowEnv.state_size(self.num_flows)
         if (
             str(self.env_config.get("graph_backend", "lazy")).lower() == "packed"
             and bool(self.env_config.get("graph_pack_build_if_missing", True))

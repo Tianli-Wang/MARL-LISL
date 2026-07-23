@@ -14,7 +14,9 @@ class GraphStore:
     def __init__(self, graph_dir: str | Path, cache_size: int = 3, preload: bool = False):
         self.graph_dir = Path(graph_dir)
         self.cache_size = max(1, int(cache_size))
-        self._cache: OrderedDict[int, dict[str, np.ndarray]] = OrderedDict()
+        # 图快照除 NumPy 边数组外还包含整数时隙标识，后续也会
+        # 按需附加边索引和 state summary，因此这里使用开放字典类型。
+        self._cache: OrderedDict[int, dict] = OrderedDict()
         self.preload = bool(preload)
         if not self.graph_dir.is_dir():
             raise FileNotFoundError(
@@ -24,7 +26,7 @@ class GraphStore:
         if self.preload:
             self.preload_all()
 
-    def _load_graph(self, k: int) -> dict[str, np.ndarray]:
+    def _load_graph(self, k: int) -> dict:
         path = self.graph_dir / f"graph_{k:04d}.npz"
         if not path.is_file():
             raise FileNotFoundError(
@@ -40,7 +42,15 @@ class GraphStore:
             raise ValueError(f"Invalid edge_index shape in {path}: {edge_index.shape}")
         if edge_attr.ndim != 2 or edge_attr.shape != (edge_index.shape[1], 6):
             raise ValueError(f"Invalid edge_attr shape in {path}: {edge_attr.shape}")
-        return {"edge_index": edge_index, "edge_attr": edge_attr}
+        # ``_snapshot_k`` 是跨缓存生命周期稳定的图快照标识。
+        # 不能使用 ``id(edge_index)`` 代替：LRU 淘汰旧数组后，
+        # Python 可能把同一对象 ID 分配给后续时隙，导致路径特征
+        # 误命中另一张图的缓存。
+        return {
+            "edge_index": edge_index,
+            "edge_attr": edge_attr,
+            "_snapshot_k": int(k),
+        }
 
     def preload_all(self) -> None:
         """Load all graph snapshots into memory; useful on large-memory servers."""
@@ -61,7 +71,7 @@ class GraphStore:
             f"({raw_bytes / 1024 ** 3:.2f} GiB raw arrays)"
         )
 
-    def get_graph(self, k: int) -> dict[str, np.ndarray]:
+    def get_graph(self, k: int) -> dict:
         k = int(k)
         if k < 0:
             raise IndexError(f"Graph timeslot must be non-negative, got {k}")

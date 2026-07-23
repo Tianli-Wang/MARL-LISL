@@ -34,7 +34,17 @@ class ObservationBuilder:
     def _cached_path_info(
         self, graph: dict, path: list[int] | tuple[int, ...] | None
     ) -> tuple[np.ndarray | None, set[tuple[int, int]], float, float, float, float]:
-        key = (id(graph["edge_index"]), self._path_key(path))
+        # 图数组的 ``id`` 只在对象存活期间唯一。PackedGraphStore
+        # 的 LRU 淘汰旧切片后，Python 会把旧 ID 复用给新时隙，
+        # 从而使新图的路径错误命中旧图的 feasible/时延缓存。
+        # 因此必须使用 GraphStore 提供的稳定时隙标识。
+        snapshot_k = graph.get("_snapshot_k")
+        if snapshot_k is None:
+            raise KeyError(
+                "图快照缺少 _snapshot_k，无法安全缓存路径特征；"
+                "请通过 GraphStore/PackedGraphStore 读取图。"
+            )
+        key = (int(snapshot_k), self._path_key(path))
         cached = self._path_cache.get(key)
         if cached is not None:
             self._path_cache.move_to_end(key)

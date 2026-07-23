@@ -15,12 +15,14 @@ sys.path.insert(0, str(ROOT / "src"))
 
 
 def find_latest_checkpoint(run_root: Path) -> Path | None:
-    """在训练输出目录中查找最新的 ``latest.pt``。
+    """选择最新训练 run，并优先返回该 run 的 ``best.pt``。
 
     每次运行 MAPPO 都会在 ``run_root`` 下创建一个独立实验目录，
-    因此这里遍历所有 ``*/checkpoints/latest.pt``，并以文件的最后
-    修改时间作为“最新训练结果”的判定依据。当修改时间相同时，
-    再按完整路径排序，保证选择结果稳定且可复现。
+    因此先根据各 run 的 ``latest.pt`` 修改时间确定最新实验。选中
+    run 后若固定验证产生了 ``best.pt``，则优先评估 best；旧实验
+    没有 best 时才回退到 latest。不能直接把 best/latest 混在一起
+    按时间排序，因为训练结束时 latest 通常比 best 更新，反而会再次
+    选中已发生后期退化的参数。
 
     如果尚未产生任何 checkpoint，返回 ``None``，交由主程序根据
     ``--methods`` 的取值决定是报错，还是仅评估 baseline。
@@ -28,10 +30,12 @@ def find_latest_checkpoint(run_root: Path) -> Path | None:
     candidates = list(run_root.glob("*/checkpoints/latest.pt"))
     if not candidates:
         return None
-    return max(
+    latest = max(
         candidates,
         key=lambda path: (path.stat().st_mtime_ns, str(path)),
     )
+    best = latest.with_name("best.pt")
+    return best if best.is_file() else latest
 
 
 # 默认数据选择当前仓库已生成的文件；checkpoint 则在脚本
@@ -99,8 +103,8 @@ def main() -> None:
     parser.add_argument(
         "--checkpoint", type=Path, default=DEFAULT_CHECKPOINT,
         help=(
-            "MAPPO checkpoint；默认自动选择 "
-            "outputs/runs/*/checkpoints/latest.pt 中修改时间最新的文件"
+            "MAPPO checkpoint；默认选择最新 run 的 best.pt，"
+            "若该 run 没有 best.pt 则回退到 latest.pt"
         ),
     )
     parser.add_argument(
@@ -110,7 +114,7 @@ def main() -> None:
     parser.add_argument(
         "--methods",
         choices=("baselines", "diagnose", "mappo", "all"),
-        default="baselines",
+        default="all",
         help="评估方法集合，默认：baselines",
     )
     parser.add_argument(

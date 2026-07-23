@@ -22,6 +22,23 @@ class PathGenerator:
         self._scipy_token: int | None = None
         self._scipy_inputs: dict | None = None
 
+    @staticmethod
+    def _snapshot_token(graph: dict) -> int:
+        """返回可跨 LRU 淘汰安全复用的图快照标识。
+
+        在线候选路径生成器会缓存 NetworkX/Scipy 搜索图。如果用
+        ``id(edge_index)`` 作为标识，旧 memmap 切片释放后的 ID 复用
+        可能让新时隙沿用旧搜索图，因此这里与 ObservationBuilder
+        统一使用 GraphStore 写入的时隙号。
+        """
+        snapshot_k = graph.get("_snapshot_k")
+        if snapshot_k is None:
+            raise KeyError(
+                "图快照缺少 _snapshot_k，无法安全缓存寻路输入；"
+                "请通过 GraphStore/PackedGraphStore 读取图。"
+            )
+        return int(snapshot_k)
+
     def _edge_weights(self, edge_attr: np.ndarray) -> np.ndarray:
         cfg = self.weight_cfg
         return (
@@ -31,8 +48,8 @@ class PathGenerator:
             / (edge_attr[:, 3] + float(cfg["lifetime_epsilon"]))
         ).astype(np.float64, copy=False)
 
-    def _get_search_graph(self, graph: dict[str, np.ndarray]) -> nx.Graph:
-        token = id(graph["edge_index"])
+    def _get_search_graph(self, graph: dict) -> nx.Graph:
+        token = self._snapshot_token(graph)
         if token == self._graph_token and self._nx_graph is not None:
             return self._nx_graph
         edge_index, edge_attr = graph["edge_index"], graph["edge_attr"]
@@ -46,8 +63,8 @@ class PathGenerator:
         self._nx_graph = search_graph
         return search_graph
 
-    def _get_scipy_inputs(self, graph: dict[str, np.ndarray]) -> dict:
-        token = id(graph["edge_index"])
+    def _get_scipy_inputs(self, graph: dict) -> dict:
+        token = self._snapshot_token(graph)
         if token == self._scipy_token and self._scipy_inputs is not None:
             return self._scipy_inputs
         edge_index, edge_attr = graph["edge_index"], graph["edge_attr"]
@@ -75,7 +92,7 @@ class PathGenerator:
         }
         return self._scipy_inputs
 
-    def prepare_graph(self, graph: dict[str, np.ndarray]) -> nx.Graph:
+    def prepare_graph(self, graph: dict) -> nx.Graph:
         """Build or reuse the NetworkX search graph before parallel path queries."""
         if str(self.weight_cfg.get("engine", "scipy")).lower() == "networkx":
             return self._get_search_graph(graph)
