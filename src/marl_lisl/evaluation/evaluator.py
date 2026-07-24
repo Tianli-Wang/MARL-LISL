@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from .metrics import MetricsAccumulator
 
 
@@ -20,6 +22,10 @@ class Evaluator:
         # 每次 run_episode 都会重新生成该列表；外部可在运行结束后将它导出，
         # 不改变原有 metrics 返回结构，避免路径数组混入结果 CSV。
         self.path_history: list[dict] = []
+        # run_episode 结束后保存逐流汇总，05 脚本会将不同方法的结果合并成
+        # method_compare_per_flow.csv；不把它嵌入 episode summary，避免 CSV
+        # 单元格中出现嵌套列表。
+        self.per_flow_metrics: list[dict] = []
 
     def run_episode(self) -> dict:
         """Execute one episode and return accumulated metrics."""
@@ -31,7 +37,12 @@ class Evaluator:
         while not done:
             if self.max_steps is not None and steps >= self.max_steps:
                 break
+            # 只计量策略从 observation 到 actions 的在线决策耗时。环境 step、
+            # 图读取、future mutex 和 CSV 导出均不计入，从而公平比较 MAPPO
+            # 推理与规则 baseline 的在线计算开销。
+            decision_start = time.perf_counter()
             actions = self.policy.act(obs, state, action_mask)
+            decision_time_s = time.perf_counter() - decision_start
             obs, state, action_mask, reward, done, info = self.env.step(actions)
             # step 完成后 current_paths 才是本方法在时隙 info["k"] 实际采用的路径。
             # 必须逐层复制，防止后续时隙更新环境状态时改写已经记录的历史。
@@ -47,6 +58,7 @@ class Evaluator:
                     "route_details": [dict(item) for item in info["route_details"]],
                 }
             )
-            metrics.update(reward, info)
+            metrics.update(reward, info, decision_time_s=decision_time_s)
             steps += 1
+        self.per_flow_metrics = metrics.per_flow_summary()
         return metrics.summary()

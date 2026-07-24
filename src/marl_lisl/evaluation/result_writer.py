@@ -9,19 +9,64 @@ from pathlib import Path
 METRIC_COLUMNS = [
     "method",
     "total_reward",
+    "reward_per_step",
     "avg_delay",
+    "delay_p95",
+    "delay_p99",
     "peak_delay",
+    "worst_flow_avg_delay",
     "future_mutex",
+    "future_mutex_per_step",
+    "raw_conflict_count",
+    "future_mutex_positive_steps",
+    "future_mutex_positive_rate",
+    "first_conflict_slot",
+    "invalid_future_path_count",
     "outage_count",
+    "outage_rate",
     "switch_count",
+    "switch_rate",
     "new_link_count",
+    "new_link_rate",
+    "maintain_ratio",
+    "setup_failure_count",
+    "setup_failure_rate",
+    "avg_hops",
+    "avg_path_distance_km",
+    "mean_decision_time_ms",
+    "p95_decision_time_ms",
     "invalid_action_count",
+    "num_flows",
+    "num_steps",
+]
+
+PER_FLOW_COLUMNS = [
+    "method",
+    "flow_id",
+    "source",
+    "target",
+    "avg_delay",
+    "delay_p95",
+    "peak_delay",
+    "outage_count",
+    "outage_rate",
+    "switch_count",
+    "switch_rate",
+    "new_link_count",
+    "new_link_rate",
+    "maintain_ratio",
+    "setup_failure_count",
+    "setup_failure_rate",
+    "avg_hops",
+    "avg_path_distance_km",
+    "avg_setup_penalty_ms",
     "num_steps",
 ]
 
 
 def print_results_table(results: list[dict]) -> None:
-    """Print a compact comparison table."""
+    """打印总量表和归一化/分布表，兼顾熟悉口径与跨场景可比性。"""
+
     header = (
         f"{'Method':<24} {'TotalReward':>14} {'AvgDelay':>10} {'PeakDelay':>10} "
         f"{'FutureMutex':>13} {'Outage':>8} {'Switch':>8} {'NewLinks':>9}"
@@ -40,6 +85,29 @@ def print_results_table(results: list[dict]) -> None:
             f"{float(row['new_link_count']):>9.2f}"
         )
 
+    print()
+    normalized_header = (
+        f"{'Method':<24} {'P95Delay':>10} {'P99Delay':>10} {'WorstFlow':>10} "
+        f"{'Mutex/Step':>11} {'MutexSteps':>10} {'OutRate':>9} "
+        f"{'SwitchRate':>11} {'LinkRate':>9} {'Maintain':>9} {'DecisionMs':>11}"
+    )
+    print(normalized_header)
+    print("-" * len(normalized_header))
+    for row in results:
+        print(
+            f"{row['method']:<24} "
+            f"{float(row.get('delay_p95', 0.0)):>10.6f} "
+            f"{float(row.get('delay_p99', 0.0)):>10.6f} "
+            f"{float(row.get('worst_flow_avg_delay', 0.0)):>10.6f} "
+            f"{float(row.get('future_mutex_per_step', 0.0)):>11.6f} "
+            f"{int(row.get('future_mutex_positive_steps', 0)):>10d} "
+            f"{float(row.get('outage_rate', 0.0)):>9.6f} "
+            f"{float(row.get('switch_rate', 0.0)):>11.6f} "
+            f"{float(row.get('new_link_rate', 0.0)):>9.6f} "
+            f"{float(row.get('maintain_ratio', 0.0)):>9.6f} "
+            f"{float(row.get('mean_decision_time_ms', 0.0)):>11.4f}"
+        )
+
 
 def write_results_csv(results: list[dict], output_path: str | Path) -> Path:
     """Write comparison results to CSV."""
@@ -51,6 +119,24 @@ def write_results_csv(results: list[dict], output_path: str | Path) -> Path:
         for row in results:
             writer.writerow({key: row.get(key, "") for key in METRIC_COLUMNS})
     print(f"saved results: {path}")
+    return path
+
+
+def write_per_flow_results_csv(
+    results: list[dict], output_path: str | Path
+) -> Path:
+    """写出逐流指标，使整体均值无法掩盖单条流的时延或切换退化。"""
+
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=PER_FLOW_COLUMNS)
+        writer.writeheader()
+        for row in results:
+            writer.writerow(
+                {key: row.get(key, "") for key in PER_FLOW_COLUMNS}
+            )
+    print(f"saved per-flow results: {path}")
     return path
 
 

@@ -103,10 +103,22 @@ python scripts/run/05_evaluate_methods.py \
   --methods mappo
 ```
 
-统一评估入口使用 action mask 后 logits 的 argmax，输出并保存
-total reward、时延、future mutex、outage、switch、新链路数量和
-非法动作数。使用 `--methods all` 可让 MAPPO 与所有已注册 baseline
-在相同 traffic 上按同一口径比较。
+统一评估入口使用 action mask 后 logits 的 argmax。使用 `--methods all`
+可让 MAPPO 与所有已注册 baseline 在相同 traffic 上按同一口径比较。
+
+评估会同时生成两份 CSV：
+
+- `method_compare.csv`：方法级汇总，包含 reward、平均/P95/P99/峰值时延、
+  最差业务流平均时延、future mutex 总量与发生率、outage/switch/new-link
+  总量与每 flow-step 归一化比率、链路保持率、平均跳数、平均路径距离和
+  在线决策耗时；
+- `method_compare_per_flow.csv`：逐流明细，用于发现总体平均值掩盖的“问题流”，
+  包含每条流的时延分布、outage、切换、新链路、保持率、跳数与路径距离。
+
+其中决策耗时只测量策略的 `act` 调用，不包含环境推进、NetworkX 路径搜索和
+future-mutex 计算时间；因此它表示算法在线选路开销，而不是整个仿真步耗时。
+时延分位数只统计成功建立路径的流，路径失败则单独进入 outage/setup-failure
+指标，避免用虚假的零时延美化结果。
 
 ## 当前限制
 

@@ -443,10 +443,12 @@ class LISLMultiFlowEnv:
         new_link_count = 0
         route_details: list[dict] = []
         for flow_id, (old_path, new_path) in enumerate(zip(old_paths, new_paths)):
-            if new_path != old_path:
+            switched = new_path != old_path
+            if switched:
                 switch_count += 1
             new_edges = edge_path_from_node_path(new_path) - edge_path_from_node_path(old_path)
-            new_link_count += len(new_edges)
+            flow_new_link_count = len(new_edges)
+            new_link_count += flow_new_link_count
             features = self.observation_builder.path_features(graph, old_path, new_path)
             if features[5] == 1:
                 feasible[flow_id] = True
@@ -475,6 +477,11 @@ class LISLMultiFlowEnv:
                         invalid_actions[flow_id] or not feasible[flow_id]
                     ),
                     "link_maintained": bool(new_path == old_path and new_path is not None),
+                    # 汇总 switch/new-link 只能说明全局开销，无法判断是否由少数
+                    # 业务流承担了大部分抖动。逐流记录真实落地动作产生的变化，
+                    # 供统一评估器计算 per-flow 稳定性和公平性。
+                    "switched": bool(switched),
+                    "new_link_count": int(flow_new_link_count),
                 }
             )
 

@@ -1,5 +1,5 @@
 # 随机种子，控制 PyTorch/NumPy/Python 随机性。
-seed: 42
+seed: 43
 # 训练设备；cuda 使用 A100，若无 GPU 代码会回退到 CPU。
 device: cuda
 # PyTorch 计算线程数；环境进程很多时不要设太大，避免线程过度竞争。
@@ -50,7 +50,7 @@ critic_learning_rate: 0.0005
 # critic loss 权重。
 value_coef: 0.5
 # entropy bonus 权重；鼓励探索，过大时会导致切换过多。
-entropy_coef: 0.003
+entropy_coef: 0.010
 # 旧配置兼容用的统一梯度裁剪阈值。
 max_grad_norm: 0.5
 # Actor 与 Critic 分开反向传播、分开裁剪。
@@ -141,4 +141,4 @@ output:
   # 训练 run 根目录。
   run_root: outputs/runs
   # 实验名会拼接到 timestamp 后面。
-  experiment_name: mappo_a100_16flow_vec
+  experiment_name: mappo_16flow_vec

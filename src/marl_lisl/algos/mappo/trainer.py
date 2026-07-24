@@ -120,7 +120,37 @@ class MAPPOTrainer:
         )
         output_cfg = mappo_config["output"]
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.run_dir = Path(output_cfg["run_root"]) / f"{timestamp}_{output_cfg['experiment_name']}"
+
+        # 将会显著影响实验结果的输入参数直接写入 run 目录名。
+        #
+        # 过去的目录名主要依赖 YAML 中手工填写的 experiment_name，例如
+        # ``mappo_16flow_vec``。当连续修改 actor 学习率或熵系数后，目录名
+        # 很容易忘记同步修改，导致多个实验仅凭目录名无法区分。这里保留
+        # experiment_name 作为实验类型前缀，同时自动追加关键超参数，使得
+        # 训练结束后只查看目录名就能知道本次运行的核心输入。
+        #
+        # config.json 仍然保存完整配置；目录名只放最常用于筛选和比较的字段，
+        # 避免把全部 YAML 展开到路径中造成路径过长或包含不适合文件名的字符。
+        def _run_name_number(value: object) -> str:
+            """把数值格式化为稳定、简洁且适合 Windows 路径的字符串。"""
+
+            if isinstance(value, float):
+                # .10g 可以避免 0.0002000000001 之类的浮点显示噪声，
+                # 同时保留 0.0001、0.003、0.01 等实验参数的可读性。
+                return format(value, ".10g")
+            return str(value)
+
+        run_hyperparams = (
+            f"actor_lr{_run_name_number(mappo_config.get('actor_learning_rate', 'na'))}"
+            f"_entropy{_run_name_number(mappo_config.get('entropy_coef', 'na'))}"
+            f"_seed{_run_name_number(mappo_config.get('seed', 'na'))}"
+            f"_envs{_run_name_number(mappo_config.get('num_envs', 'na'))}"
+            f"_rollout{_run_name_number(mappo_config.get('rollout_length', 'na'))}"
+            f"_updates{_run_name_number(mappo_config.get('total_updates', 'na'))}"
+        )
+        experiment_name = str(output_cfg["experiment_name"])
+        run_name = f"{timestamp}_{experiment_name}_{run_hyperparams}"
+        self.run_dir = Path(output_cfg["run_root"]) / run_name
         self.checkpoint_dir = self.run_dir / "checkpoints"
         self.metrics_dir = self.run_dir / "metrics"
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
